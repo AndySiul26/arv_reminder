@@ -1,0 +1,12 @@
+arv_reminder_telegram/
+│
+├── app.py                      # Punto de entrada principal del servidor Flask
+├── services.py                 # Funciones para envío de mensajes a Telegram (modularizado)
+├── webhook_utils.py           # Funciones para registrar, eliminar o consultar el webhook
+│
+├── .env                        # Variables de entorno (TOKEN, URL del webhook, etc.)
+├── requirements.txt            # Lista de dependencias necesarias (Flask, requests, etc.)
+│
+├── runtime.txt                 # Solo para Glitch: especifica la versión de Python
+│
+└── README.md                   # Documentación del proyecto

@@ -1,0 +1,52 @@
+# Entorno virtual
+.venv/
+venv/
+ENV/
+env/
+
+# Variables de entorno
+.env
+.env.local
+.env.development
+.env.production
+
+# Archivo de configuración de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+logs/
+debug_*.json
+debug_*.txt
+mi_diccionario.json
+
+# Archivos específicos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Archivos específicos de Glitch
+.glitch-assets
+.bash_history
+shrinkwrap.yaml
