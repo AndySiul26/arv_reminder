@@ -113,5 +113,5 @@ atexit.register(cerrar_aplicacion)
 signal.signal(signal.SIGINT, lambda s, f: cerrar_aplicacion())
 signal.signal(signal.SIGTERM, lambda s, f: cerrar_aplicacion())
 
-if __name__ == "__main__":
-    app.run(debug=True) 
+# if __name__ == "__main__":
+#     app.run(debug=True) 
