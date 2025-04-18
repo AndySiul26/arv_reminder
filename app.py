@@ -28,7 +28,7 @@ def index():
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
-    
+    print("mensaje entrante...")
     # Manejar mensajes regulares
     if "message" in data:
         return manejar_mensaje(data)
