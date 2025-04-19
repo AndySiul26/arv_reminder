@@ -1,19 +1,24 @@
 # test_telegram.py
 from services import enviar_telegram
+import os
 
 # reemplaza con tu ID de Telegram (puedes obtenerlo con https://t.me/userinfobot)
-chat_id = 6934945886  
+chat_id = os.environ.get("TELEGRAM_TEST_USER_ID")
+
 
 # Texto simple
-enviar_telegram(chat_id, tipo="texto", mensaje="¡Hola Luis! Esto es un recordatorio.")
-
-# Con botones
 enviar_telegram(
-    chat_id,
-    tipo="botones",
-    mensaje="¿Quieres confirmar tu tarea?",
-    botones=[
-        {"texto": "✅ Sí", "data": "confirmar"},
-        {"texto": "❌ No", "data": "cancelar"}
-    ]
+    chat_id=chat_id,
+    tipo="texto",
+    mensaje="*Recordatorio importante:* _Revisar el código antes de dormir_",
+    formato="Markdown"
 )
+
+enviar_telegram(
+    chat_id=chat_id,
+    tipo="botones",
+    mensaje="<b>¿Ya completaste tu tarea?</b>",
+    botones=[{"texto": "Sí", "data": "confirmado"}, {"texto": "Aún no", "data": "pendiente"}],
+    formato="HTML"
+)
+
