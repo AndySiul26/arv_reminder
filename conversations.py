@@ -25,8 +25,6 @@ def iniciar_recordatorio(chat_id, nombre_usuario):
     
     return "¿Qué tarea necesitas recordar? Por favor, escribe el nombre de la tarea."
 
-def 
-
 def procesar_mensaje(chat_id, texto, nombre_usuario):
     """Procesa un mensaje del usuario según el estado de la conversación"""
     # Si no hay una conversación activa, iniciarla
