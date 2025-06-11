@@ -50,3 +50,11 @@ mi_diccionario.json
 .glitch-assets
 .bash_history
 shrinkwrap.yaml
+
+# Archivos de tests
+test.py
+
+# Archivos de gestiones externas de bases de datos
+gestionar_actualizaciones.py
+Actualizaciones.txt
+

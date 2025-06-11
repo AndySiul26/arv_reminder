@@ -1,5 +1,9 @@
 """
-Este script crea la tabla necesaria en Supabase para almacenar los recordatorios.
+Este script crea las tablas necesarias en Supabase:
+- recordatorios
+- actualizaciones_info
+- chats_avisados_actualizaciones
+- usuarios_info
 Se debe ejecutar una sola vez para configurar la base de datos.
 """
 
@@ -12,18 +16,21 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY_SERVICE_ROLE")
 
-def crear_tabla_recordatorios():
-    """Crea o actualiza la tabla de recordatorios en Supabase"""
+def crear_cliente():
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("Error: Faltan las credenciales de Supabase en el archivo .env")
-        return False
+        return None
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def crear_tabla_recordatorios(supabase: Client) -> bool:
+    """
+    Crea la tabla 'recordatorios' con todas las columnas necesarias,
+    incluyendo 'es_formato_utc'. Si la tabla ya existe, añade
+    'es_formato_utc' sólo si no está presente.
+    """
     try:
-        # Inicializar cliente
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        
-        # SQL combinado: creación + alteración segura
         sql = """
+        -- Tabla principal: recordatorios
         CREATE TABLE IF NOT EXISTS recordatorios (
             id SERIAL PRIMARY KEY,
             chat_id TEXT NOT NULL,
@@ -32,46 +39,181 @@ def crear_tabla_recordatorios():
             descripcion TEXT,
             fecha_hora TIMESTAMP,
             creado_en TIMESTAMP NOT NULL,
-            notificado BOOLEAN DEFAULT FALSE
+            notificado BOOLEAN DEFAULT FALSE,
+            es_formato_utc BOOLEAN DEFAULT FALSE
         );
 
-        -- Agregar columnas nuevas si no existen
+        -- Añadir columnas extra si no existen
         DO $$
         BEGIN
             IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
+                SELECT 1 FROM information_schema.columns
                 WHERE table_name='recordatorios' AND column_name='aviso_constante'
             ) THEN
                 ALTER TABLE recordatorios ADD COLUMN aviso_constante BOOLEAN DEFAULT FALSE;
             END IF;
 
             IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
+                SELECT 1 FROM information_schema.columns
                 WHERE table_name='recordatorios' AND column_name='aviso_detenido'
             ) THEN
                 ALTER TABLE recordatorios ADD COLUMN aviso_detenido BOOLEAN DEFAULT FALSE;
             END IF;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='recordatorios' AND column_name='repetir'
+            ) THEN
+                ALTER TABLE recordatorios ADD COLUMN repetir BOOLEAN DEFAULT FALSE;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='recordatorios' AND column_name='intervalo_repeticion'
+            ) THEN
+                ALTER TABLE recordatorios ADD COLUMN intervalo_repeticion TEXT DEFAULT '';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='recordatorios' AND column_name='intervalos'
+            ) THEN
+                ALTER TABLE recordatorios ADD COLUMN intervalos INTEGER DEFAULT 0;
+            END IF;
+
+            -- Nueva columna es_formato_utc
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='recordatorios' AND column_name='es_formato_utc'
+            ) THEN
+                ALTER TABLE recordatorios ADD COLUMN es_formato_utc BOOLEAN DEFAULT FALSE;
+            END IF;
         END $$;
 
-        -- Crear índices si no existen
+        -- Índices útiles
         CREATE INDEX IF NOT EXISTS idx_chat_id ON recordatorios (chat_id);
         CREATE INDEX IF NOT EXISTS idx_fecha_hora ON recordatorios (fecha_hora);
         CREATE INDEX IF NOT EXISTS idx_notificado ON recordatorios (notificado);
         """
-
-        # Ejecutar el SQL desde la función RPC personalizada en Supabase
         response = supabase.rpc("exec_sql", {"sql": sql}).execute()
-
-        print("Tabla de recordatorios creada o actualizada correctamente")
+        print(response)
+        print("🛠️ Tabla 'recordatorios' creada o actualizada correctamente.")
         return True
 
     except Exception as e:
-        print(f"Error al crear o actualizar la tabla en Supabase: {e}")
+        print(f"❌ Error al crear o actualizar la tabla 'recordatorios': {e}")
         return False
+
+def crear_tablas_actualizaciones(supabase: Client):
+    try:
+        sql = """
+        CREATE TABLE IF NOT EXISTS actualizaciones_info (
+            id SERIAL PRIMARY KEY,
+            titulo TEXT NOT NULL,
+            descripcion TEXT,
+            fecha_hora TIMESTAMP DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS chats_avisados_actualizaciones (
+            chat_id TEXT PRIMARY KEY,
+            id_ultima_actualizacion INTEGER,
+            FOREIGN KEY (id_ultima_actualizacion) REFERENCES actualizaciones_info(id) ON DELETE SET NULL
+        );
+
+        ALTER TABLE chats_avisados_actualizaciones
+        ALTER COLUMN id_ultima_actualizacion DROP NOT NULL;
+        """
+        response = supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ Tablas de actualizaciones creadas correctamente.")
+    except Exception as e:
+        print(f"❌ Error al crear las tablas de actualizaciones: {e}")
+
+def crear_tabla_chats_info(supabase: Client):
+    """Crea la tabla chats_info que almacena información general de chats (usuarios o grupos)"""
+    sql = """
+    CREATE TABLE IF NOT EXISTS chats_info (
+        chat_id TEXT PRIMARY KEY,
+        nombre TEXT,
+        tipo TEXT,
+        zona_horaria TEXT DEFAULT NULL,
+        creado_en TIMESTAMP NOT NULL
+    );
+
+    -- Añadir la columna creado_en si no existe
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'chats_info' AND column_name = 'creado_en'
+        ) THEN
+            ALTER TABLE chats_info ADD COLUMN creado_en TIMESTAMP NOT NULL DEFAULT now();
+        END IF;
+    END $$;
+
+
+    """
+
+    try:
+        response = supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ Tabla chats_info creada correctamente")
+        print("✅ Response:", response)
+        return True
+    except Exception as e:
+        print(f"❌ Error al crear la tabla chats_info: {e}")
+
+def crear_tabla_modo_tester(supabase: Client):
+    """
+    Crea una tabla para almacenar el modo tester con un único registro booleano.
+    """
+    try:
+        sql = """
+        CREATE TABLE IF NOT EXISTS modo_tester (
+            id SERIAL PRIMARY KEY,
+            modo_tester BOOLEAN DEFAULT FALSE
+        );
+
+        -- Insertar un registro por defecto si la tabla está vacía
+        INSERT INTO modo_tester (modo_tester) 
+        SELECT FALSE 
+        WHERE NOT EXISTS (SELECT 1 FROM modo_tester);
+        """
+        response = supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ Tabla de modo tester creada correctamente.")
+        return response
+    except Exception as e:
+        print(f"❌ Error al crear la tabla de modo tester: {e}")
+
+def crear_tabla_chats_id_estados(supabase: Client):
+    """
+    Crea una tabla llamada 'chats_id_estados' para almacenar estados adicionales asociados a un chat_id.
+    El campo 'chat_id' es clave primaria, por lo que no se permitirán valores repetidos.
+    """
+    try:
+        sql = """
+        CREATE TABLE IF NOT EXISTS chats_id_estados (
+            chat_id TEXT PRIMARY KEY,  -- No se permiten chat_id duplicados
+            estado_1 TEXT,
+            estado_2 TEXT,
+            estado_3 TEXT,
+            estado_4 TEXT,
+            estado_5 TEXT
+        );
+        """
+        response = supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ Tabla 'chats_id_estados' creada o verificada correctamente.")
+        return response
+    except Exception as e:
+        print(f"❌ Error al crear la tabla 'chats_id_estados': {e}")
+
 
 if __name__ == "__main__":
     print("Configurando base de datos en Supabase...")
-    if crear_tabla_recordatorios():
+    cliente = create_client(SUPABASE_URL, SUPABASE_KEY)
+    if crear_tabla_recordatorios(cliente):
+        crear_tablas_actualizaciones(cliente)
+        crear_tabla_chats_info(cliente)
+        crear_tabla_modo_tester(cliente)
+        crear_tabla_chats_id_estados(cliente)
         print("✅ Configuración completada con éxito")
     else:
         print("❌ Error en la configuración")

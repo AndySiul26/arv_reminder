@@ -22,3 +22,13 @@ enviar_telegram(
     formato="HTML"
 )
 
+
+enviar_telegram(
+    chat_id=chat_id,
+    tipo="botones",
+    mensaje="*¿Ya completaste tu tarea?*",
+    botones=[{"texto": "Sí", "data": "confirmado"}, {"texto": "NEL PERRO", "data": "pendiente"}],
+    formato="markdown"
+)
+
+

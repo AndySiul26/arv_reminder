@@ -5,3 +5,4 @@ supabase
 schedule
 python-telegram-bot
 gunicorn
+tzdata

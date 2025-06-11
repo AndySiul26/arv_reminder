@@ -5,11 +5,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-print(WEBHOOK_URL)
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def set_webhook():
+    WEBHOOK_URL = input("WEBHOOK URL:").strip()
+    if not "webhook" in WEBHOOK_URL: WEBHOOK_URL += "/webhook"
+    print(WEBHOOK_URL)
     response = requests.get(f"{BASE_URL}/setWebhook", params={"url": WEBHOOK_URL})
     print("Set Webhook:", response.status_code, response.json())
 
