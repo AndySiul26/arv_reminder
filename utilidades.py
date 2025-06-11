@@ -1,7 +1,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import os
 
-zona_servidor = "America/Mexico_City" # Cambiar a UTC antes de subir al servidor
+zona_servidor = os.environ.get("ZONA_SERVIDOR", "UTC")
 
 def convertir_fecha_local_a_utc(fecha_local: datetime, zona_horaria: str) -> datetime:
     """
