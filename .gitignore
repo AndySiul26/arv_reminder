@@ -55,6 +55,6 @@ shrinkwrap.yaml
 test.py
 
 # Archivos de gestiones externas de bases de datos
-gestionar_actualizaciones.py
+# gestionar_actualizaciones.py
 Actualizaciones.txt
 
