@@ -36,8 +36,8 @@ signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())
 signal.signal(signal.SIGTERM, lambda s,f: cerrar_aplicacion())
 
 # Si deseas ejecutar con python app.py (descomenta):
-# if __name__ == "__main__":
-#     Modo_Tester(MODO_TESTER)
-#     app.run(debug=True, use_reloader=False)
+if __name__ == "__main__":
+    Modo_Tester(MODO_TESTER)
+    app.run(debug=True, use_reloader=False)
 
 # IMPLEMENTAR ACTUALIZACION DE SERVIDORES CADA MINUTO PARA QUE LOS PROYECTOS NO SE DUERMAN

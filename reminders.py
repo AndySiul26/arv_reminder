@@ -104,11 +104,11 @@ class AdministradorRecordatorios:
             if recordatorio.get("fecha_hora"):
                 try:
                     recordatorio_fecha_hora_utc = recordatorio["fecha_hora"]
-                    recordatorio_fecha_hora_local =  utilidades.convertir_fecha_utc_a_local(fecha_utc=recordatorio_fecha_hora_utc, zona_horaria=zona_horaria)
+                    recordatorio_fecha_hora_local =  utilidades.convertir_fecha_utc_a_local(fecha_utc=datetime.fromisoformat(recordatorio_fecha_hora_utc), zona_horaria=zona_horaria)
                     # dt = datetime.fromisoformat(recordatorio_fecha_hora_local)
                     fecha_hora_str = f" (programado para {recordatorio_fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')})"
-                except:
-                    pass
+                except Exception as e:
+                    print("Error al convertir fecha hora en local:", str(e))
 
             # Crear mensaje
             mensaje = "⏰ *RECORDATORIO*\n\n"
