@@ -84,7 +84,7 @@ def guardar_diccionario(diccionario):
     except Exception as e:
         print(f"Ocurrió un error al guardar el diccionario: {e}")
 
-def editar_mensaje_texto(chat_id, message_id, nuevo_texto, formato=None, guardar_datos=None):
+def editar_mensaje_texto(chat_id, message_id, nuevo_texto, formato=None, guardar_datos=None, counter_recursivity=0):
     url = f"{BASE_URL}/editMessageText"
     payload = {
         "chat_id": chat_id,
@@ -94,6 +94,12 @@ def editar_mensaje_texto(chat_id, message_id, nuevo_texto, formato=None, guardar
     if formato:
         payload["parse_mode"] = formato
     ret= requests.post(url, json=payload)
+    if ret.status_code != 200:
+        if counter_recursivity<2:
+            ret = editar_mensaje_texto(chat_id=chat_id, message_id=message_id, nuevo_texto=nuevo_texto, formato=None, guardar_datos=guardar_datos, counter_recursivity=counter_recursivity+1)
+        else:
+            return ret
+        # ret = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=nuevo_texto, formato=formato)
 
     # Funcion de guardado de datos 
     
