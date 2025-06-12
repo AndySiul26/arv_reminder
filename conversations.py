@@ -21,7 +21,7 @@ ESTADO_ZONA_HORARIA = "zona_horaria"
 ESTADO_ZONA_HORARIA_CONFIRMAR = "zona_horaria_confirmar"
 ESTADO_FECHA_HORA = "fecha_hora"
 ESTADO_REPETIR = "repetir"
-ESTADO_INVERVALO_REPETICION = "intervalos"
+ESTADO_INTERVALO_REPETICION = "intervalos"
 ESTADO_AVISO_CONSTANTE = "aviso_constante"
 ESTADO_CONFIRMAR = "confirmar"
 
@@ -224,9 +224,9 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
                 mensaje += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
                 mensaje += f"  🔁 Repetible: {'Sí' if r['repetir'] else 'No'}\n"
                 if r['repetir']:
-                    mensaje += f"     Intervalo: Cada {r['intervalos']} {r['intervalo_repeticion']}\n"
+                    mensaje += f"  ⌚ Intervalo: Cada {r['intervalos']} {r['intervalo_repeticion']}\n"
                 mensaje += f"  🔔 Aviso constante: {'Sí' if r['aviso_constante'] else 'No'}\n\n"
-
+                
         except Exception as e:
             print(f"Error al mostrar los recordatorios del usuario {chat_id}:", str(e))
             texto_error = "Error al mostrar los recordatorios, error informado al administrador. Disculpe las molestias."
@@ -317,6 +317,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             {"texto": "Repetir",       "data": "campo_repetir"},
             {"texto": "Intervalo",     "data": "campo_intervalo"},
             {"texto": "Aviso Const.",  "data": "campo_aviso_constante"},
+            {"texto": "Eliminar",  "data": "campo_eliminar"},
             {"texto": "Cancelar",  "data": "cancelar"},
         ]
         enviar_telegram(
@@ -329,19 +330,41 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
     # — FLUJO DE ELECCIÓN DE CAMPO — (llega por callback)
     if estado_actual == ESTADO_EDITAR_CAMPO:
+        datos = conversaciones[chat_id]["datos"]
+        record_id = datos["record_id"]
+        if texto == "campo_eliminar":
+            supabase_db.eliminar_recordatorio_por_id(recordatorio_id=record_id)
+            if conversaciones[chat_id]["id_callback"]:
+                editar_mensaje_texto(chat_id=chat_id, message_id= conversaciones[chat_id]["id_callback"], nuevo_texto="¡Recordatorio eliminado!", formato="Markdown")
+            else:
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="¡Recordatorio eliminado!", formato="Markdown")
+
+            del conversaciones[chat_id]
+            return ""
         campo_sel = texto  # ej. "campo_nombre_tarea"
         conversaciones[chat_id]["datos"]["campo_sel"] = campo_sel
         guardar_estado(chat_id=chat_id,estado= ESTADO_EDITAR_VALOR)
         # Pedimos nuevo valor
+        
         prompt = {
             "campo_nombre_tarea": "Escribe el *nuevo nombre* de la tarea:",
             "campo_descripcion":  "Escribe la *nueva descripción*:",
             "campo_fecha_hora":   "Escribe la *nueva fecha y hora* (DD/MM/YYYY HH:MM [Formato de 24 horas]):",
             "campo_repetir":      "¿Repetir? (si/no):",
-            "campo_intervalo":    "Escribe el *nuevo intervalo* en formato `n:x`:",
-            "campo_aviso_constante": "¿Aviso constante? (si/no):"
+            "campo_intervalo":     (
+                                        "¿Con qué frecuencia deseas que se repita el recordatorio?\n"
+                                        "Escribe el intervalo en el siguiente formato: `1:d`\n\n"
+                                        "*Símbolos válidos:*\n"
+                                        "`x` - minutos\n"
+                                        "`h` - horas\n"
+                                        "`d` - días\n"
+                                        "`w` - semanas\n"
+                                        "`m` - meses\n"
+                                        "`a` - años\n\n"
+                                        "*Ejemplo:* `2:h` significa cada 2 horas"
+                                    ),
         }.get(campo_sel, "Escribe el nuevo valor:")
-        enviar_telegram(chat_id, tipo="texto", mensaje=prompt, func_guardado_data=guardar_info_mensaje_enviado)
+        enviar_telegram(chat_id, tipo="texto", mensaje=prompt, func_guardado_data=guardar_info_mensaje_enviado, formato="markdown")
         return ""
 
      # — FLUJO DE RECEPCIÓN DE NUEVO VALOR —
@@ -362,12 +385,28 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             "campo_aviso_constante": ("aviso_constante", raw.lower() in ["si","s","yes","y"])
         }
         col, val = col_val_mapping.get(campo, (None, None))
+        
+        
+        
         if not col:
             enviar_telegram(chat_id, tipo="texto", mensaje="Error de campo. Intenta de nuevo.",func_guardado_data=guardar_info_mensaje_enviado)
             return ""
 
         # — ACTUALIZAR CON FUNCIÓN CENTRALIZADA —
-        exito = actualizar_campos_recordatorio(record_id, {col: val})
+        if campo=="campo_intervalo":
+            try:
+                num, intervalo = texto.lower().split(":")
+                if num.isdigit() and intervalo in ["s", "x", "h", "d", "w", "m", "a"]:
+                    numero = int(num)
+                    conversaciones[chat_id]["datos"]["intervalos"] = numero
+                    conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
+                    # Pasar al estado de aviso constante
+                    exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": num, "intervalo_repeticion": intervalo})
+            except Exception as e:
+                print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
+        else:
+            exito = actualizar_campos_recordatorio(record_id, {col: val})
+
         if exito:
             enviar_telegram(chat_id, tipo="texto", mensaje="✅ Recordatorio actualizado correctamente.",func_guardado_data=guardar_info_mensaje_enviado)
         else:
@@ -398,7 +437,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             
         guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA)
         return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
-                "Por ejemplo: 20/04/2025 15:30")
+                "Por ejemplo: " +  utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
     
     elif estado_actual == ESTADO_ZONA_HORARIA:
         if texto in ZONAS_HORARIAS:
@@ -430,7 +469,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             # si no era ese flujo, continuar normalmente…
             guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA, guardar_zona_horaria=True)
             return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora "
-                    "en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\nPor ejemplo: 20/04/2025 15:30")
+                    "en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\nPor ejemplo:" + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
 
         else:
             # usuario quiere cambiarla
@@ -448,7 +487,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             conversaciones[chat_id]["datos"]["fecha_hora_local"] = fecha_hora.isoformat()
         except ValueError:
             return ("Lo siento, no pude entender el formato de fecha y hora. Por favor, utiliza el formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
-                    "Por ejemplo: 20/04/2025 15:30")
+                    "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
         
         # Pasar al estado de confirmación
         guardar_estado(chat_id=chat_id,estado= ESTADO_REPETIR)
@@ -458,7 +497,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         if texto.lower() in ["sí", "si", "s", "yes", "y", "confirmar"]:
 
             conversaciones[chat_id]["datos"]["repetir"] = "si"
-            guardar_estado(chat_id=chat_id,estado= ESTADO_INVERVALO_REPETICION)
+            guardar_estado(chat_id=chat_id,estado= ESTADO_INTERVALO_REPETICION)
             return generar_mensaje_intervalo_repeticion(chat_id)
 
         elif texto.lower() in ["no", "n", "cancelar"]:
@@ -468,7 +507,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         else:
             return "Disculpa, no entendi tu respuesta, ¿puedes volver a escribirla?"
 
-    elif estado_actual == ESTADO_INVERVALO_REPETICION:
+    elif estado_actual == ESTADO_INTERVALO_REPETICION:
         numero = ""
         if ":" in texto.lower():
             num, intervalo = texto.lower().split(":")
@@ -631,7 +670,12 @@ def generar_mensaje_confirmacion(chat_id):
     mensaje += f"📢 *Aviso constante* {'Sí' if datos['aviso_constante'] else 'No'}\n"
     mensaje += f"📢 *Repetir:* {datos['repetir']}\n"
     if datos['repetir'] =="si":
-        mensaje += f"   *Cada* {datos['invervalos']} {significado_tiempo(datos['intervalo_repeticion'], datos['intervalos']>1)} \n"
+        try:
+            intervalo_repeticion = datos['intervalo_repeticion']
+            intervalos = datos['intervalos']
+            mensaje += f"   *Cada* {intervalos} {significado_tiempo(intervalo_repeticion, (intervalos > 1))} \n"
+        except Exception as e:
+            print("Error en los intervalos de repeticion:", str(e))
         
 
     if datos.get("fecha_hora"):
@@ -646,6 +690,7 @@ def generar_mensaje_confirmacion(chat_id):
         mensaje += "🕒 *Fecha y hora:* No especificada\n"
     
     mensaje += "\n¿Son correctos estos datos? Responde 'sí' para confirmar o 'no' para cancelar."
+    
     if not conversaciones[chat_id].get("id_callback", False):
         enviar_telegram(
             chat_id=chat_id,
@@ -814,7 +859,22 @@ def generar_mensaje_intervalo_repeticion(chat_id):
         "`a` - años\n\n"
         "*Ejemplo:* `2:h` significa cada 2 horas"
     )
-    return mensaje
+
+    if not conversaciones[chat_id].get("id_callback", False):
+        enviar_telegram(
+                chat_id=chat_id,
+                tipo="texto",
+                mensaje= mensaje,
+                formato= "markdown"
+            )
+    else:
+        editar_mensaje_texto(chat_id=chat_id,
+                             message_id=conversaciones[chat_id]["id_callback"],
+                             nuevo_texto=mensaje,
+                             formato="markdown"
+                             )
+    conversaciones[chat_id]["datos"]["last_id_message"] = None
+    return ""
 
 def generar_mensaje_aviso_constante(chat_id):
     conversaciones[chat_id]["wait_callback"] = True
@@ -827,7 +887,8 @@ def generar_mensaje_aviso_constante(chat_id):
                 "Esto puede ayudarte a no olvidarla si no la realizas justo cuando se activa el recordatorio."
             ),
             botones=[{"texto": "Sí", "data": "si"}, {"texto": "No", "data": "no"}],
-            formato="markdown"
+            formato="markdown",
+            func_guardado_data=guardar_info_mensaje_enviado
         )
     else:
         editar_mensaje_con_botones(

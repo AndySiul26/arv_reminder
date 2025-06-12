@@ -11,6 +11,7 @@ import utilidades
 from supabase_db import (
     obtener_recordatorios_pendientes,
     marcar_como_notificado,
+    marcar_como_repetido,
     eliminar_recordatorios_finalizados,
     obtener_chats_sin_zona_horaria
 )
@@ -96,6 +97,7 @@ class AdministradorRecordatorios:
             
             aviso_constante = bool(recordatorio.get("aviso_constante", False))
             repetir = bool(recordatorio.get("repetir", False))
+            repeticion_creada = bool(recordatorio.get("repeticion_creada", False))
             simbolo = recordatorio.get("intervalo_repeticion", "")
             num = int(recordatorio.get("intervalos", 0))
             zona_horaria = conversaciones.get(chat_id,{}).get("datos",{}).get("zona_horaria","")
@@ -152,7 +154,7 @@ class AdministradorRecordatorios:
             marcar_como_notificado(recordatorio["id"])
 
             # Si debe repetirse, crear siguiente
-            if repetir and recordatorio.get("fecha_hora") and simbolo and num > 0:
+            if repetir and recordatorio.get("fecha_hora") and simbolo and num > 0 and not repeticion_creada:
                 try:
                     original_dt = datetime.fromisoformat(recordatorio["fecha_hora"])
 
@@ -185,10 +187,13 @@ class AdministradorRecordatorios:
                             "creado_en":         datetime.now().isoformat(),
                             "es_formato_utc":    True,
                             "repetir":           True,
+                            "intervalos":        num,
                             "intervalo_repeticion": simbolo,
-                            "intervalos":        num
+                            "aviso_constante":   aviso_constante
                         }
                         supabase_guardar_recordatorio(nuevo)
+                        # Marcar el recordatorio original como repeticion_creada para que no se repita esto nuevamente
+                        marcar_como_repetido(recordatorio["id"])
                         print(f"Siguiente recordatorio programado para {nueva_dt.isoformat()}")
                 except Exception as e:
                     print(f"Error al crear siguiente recordatorio repetido: {e}")

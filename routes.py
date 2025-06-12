@@ -62,6 +62,7 @@ def manejar_mensaje(data):
     # elif text.startswith("/pendientes"):
     #     enviar_telegram(chat_id, tipo="texto", mensaje="Pendientes en desarrollo")
     else:
+        resp=None
         try:
             resp = procesar_mensaje(chat_id, text, nombre)
         

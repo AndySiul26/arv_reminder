@@ -88,6 +88,14 @@ def crear_tabla_recordatorios(supabase: Client) -> bool:
             ) THEN
                 ALTER TABLE recordatorios ADD COLUMN es_formato_utc BOOLEAN DEFAULT FALSE;
             END IF;
+
+            -- Nueva columna repeticion_creada
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='recordatorios' AND column_name='repeticion_creada'
+            ) THEN
+                ALTER TABLE recordatorios ADD COLUMN repeticion_creada BOOLEAN DEFAULT FALSE;
+            END IF;
         END $$;
 
         -- Índices útiles

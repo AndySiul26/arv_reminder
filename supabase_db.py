@@ -50,7 +50,8 @@ def guardar_recordatorio(datos):
             "aviso_constante": datos.get("aviso_constante", False),
             "repetir": datos.get("repetir", False) in [True, "si", "yes", "y"],
             "intervalo_repeticion": datos.get("intervalo_repeticion", ""),
-            "intervalos": int(datos.get("intervalos", 0))
+            "intervalos": int(datos.get("intervalos", 0)),
+            "repeticion_creada": False
         }
 
         # Insertar en la tabla recordatorios
@@ -207,7 +208,26 @@ def marcar_como_notificado(recordatorio_id):
             return False
     
     except Exception as e:
-        print(f"Error al marcar recordatorio como notificado: {e}")
+        print(f"Error al marcar recordatorio como repeticion_creada: {e}")
+        return False
+    
+def marcar_como_repetido(recordatorio_id):
+    """Marca un recordatorio como repetido"""
+    if not supabase:
+        if not inicializar_supabase():
+            return False
+
+    try:
+        response = supabase.table("recordatorios").update({"repeticion_creada": True}).eq("id", recordatorio_id).execute()
+        
+        if response.data:
+            return True
+        else:
+            print(f"Error: No se pudo marcar como repeticion_creada en el recordatorio {recordatorio_id}")
+            return False
+
+    except Exception as e:
+        print(f"Error al marcar recordatorio como repeticion_creada en el recordatorio {recordatorio_id}")
         return False
     
 def cambiar_estado_aviso_detenido(chat_id, estado):
@@ -284,6 +304,26 @@ def eliminar_recordatorios_finalizados():
 
     except Exception as e:
         print(f"Error al eliminar recordatorios: {e}")
+        return False
+
+def eliminar_recordatorio_por_id(recordatorio_id):
+    """Elimina un recordatorio específico por su ID"""
+    if not supabase:
+        if not inicializar_supabase():
+            return False
+
+    try:
+        response = supabase.table("recordatorios").delete().eq("id", recordatorio_id).execute()
+        
+        if response.data:  # Verifica si algo fue eliminado
+            print(f"✅ Recordatorio con ID {recordatorio_id} eliminado correctamente.")
+            return True
+        else:
+            print(f"⚠️ No se encontró ningún recordatorio con ID {recordatorio_id}.")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error al eliminar recordatorio con ID {recordatorio_id}: {e}")
         return False
 
 
@@ -781,7 +821,8 @@ if __name__ == "__main__":
         "11": lambda: obtener_chats_para_actualizacion(),
         "12": lambda: actualizar_recordatorios_por_chat(input("chat_id: ")),
         "13": lambda: print("Modo Tester :",  "SI" if leer_modo_tester() else "NO"),
-        "14": lambda: actualizar_modo_tester(input("¿Habilitar modo tester?(si=s/no=cualquier otro caracter): ") == "s")
+        "14": lambda: actualizar_modo_tester(input("¿Habilitar modo tester?(si=s/no=cualquier otro caracter): ") == "s"),
+        "15": lambda: print(marcar_como_repetido(input("ID del recordatorio: ")))
     }
 
     while True:
@@ -800,6 +841,7 @@ if __name__ == "__main__":
         print("12. Actualizar recordatorios por chat")
         print("13. Leer estado Modo Tester")
         print("14. Actualizar Modo Tester")
+        print("15. Marcar como repeticion_creada")
         print("0. Salir")
 
         opcion = input("Selecciona una opción: ")

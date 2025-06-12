@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import os
 
@@ -91,6 +91,19 @@ def hora_utc_servidor_segun_zona_host()-> datetime:
     ahora = datetime.now()
     hora = convertir_fecha_local_a_utc(ahora, zona_servidor)
     return hora
+
+def sumar_hora_servidor(zona_horaria,minutos=0, horas=0, dias=0, semanas=0)-> datetime:
+  fh = hora_utc_servidor_segun_zona_host()
+
+  fh_s = fh + timedelta(minutes=minutos)
+  fh_s = fh_s + timedelta(hours=horas)
+  fh_s = fh_s + timedelta(days=dias)
+  fh_s = fh_s + timedelta(weeks=semanas)
+
+  # Sumar 1 semana
+  fh_l = convertir_fecha_utc_a_local(fecha_utc=fh_s, zona_horaria=zona_horaria)
+  return fh_l
+
 
 if __name__ == "__main__":
     print(hora_utc_servidor_segun_zona_host().isoformat())
