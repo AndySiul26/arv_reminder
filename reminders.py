@@ -6,6 +6,7 @@ from datetime import datetime
 import time
 import threading
 import schedule, os, requests
+import utilidades
 
 from supabase_db import (
     obtener_recordatorios_pendientes,
@@ -90,18 +91,22 @@ class AdministradorRecordatorios:
         """Envía un recordatorio al usuario y, si es repetible, crea el siguiente."""
         try:
             chat_id = recordatorio["chat_id"]
+            conversaciones = conversations.inicializar_conversaciones(chat_id=chat_id, nombre_usuario=recordatorio.get("usuario",""))
             
             aviso_constante = bool(recordatorio.get("aviso_constante", False))
             repetir = bool(recordatorio.get("repetir", False))
             simbolo = recordatorio.get("intervalo_repeticion", "")
             num = int(recordatorio.get("intervalos", 0))
+            zona_horaria = conversaciones.get(chat_id,{}).get("datos",{}).get("zona_horaria","")
 
             # Formatear fecha si existe
             fecha_hora_str = ""
             if recordatorio.get("fecha_hora"):
                 try:
-                    dt = datetime.fromisoformat(recordatorio["fecha_hora"])
-                    fecha_hora_str = f" (programado para {dt.strftime('%d/%m/%Y a las %H:%M')})"
+                    recordatorio_fecha_hora_utc = recordatorio["fecha_hora"]
+                    recordatorio_fecha_hora_local =  utilidades.convertir_fecha_utc_a_local(fecha_utc=recordatorio_fecha_hora_utc, zona_horaria=zona_horaria)
+                    # dt = datetime.fromisoformat(recordatorio_fecha_hora_local)
+                    fecha_hora_str = f" (programado para {recordatorio_fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')})"
                 except:
                     pass
 
@@ -128,7 +133,6 @@ class AdministradorRecordatorios:
             # RECORDATORIOS DE AVISO CONSTANTE, SE EDITARAN ESOS MENSAJES CUANDO SE DETENGAN 
             try:
                 if aviso_constante:
-                    conversaciones = conversations.inicializar_conversaciones(chat_id=chat_id, nombre_usuario=recordatorio.get("usuario",""))
                     res = ret.json() # Convertimos a formato de diccionario
                     if res.get("ok", False) and conversaciones:
                         data = res.get("result", None)

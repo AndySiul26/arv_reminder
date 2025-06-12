@@ -445,6 +445,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             fecha_hora_utc = utilidades.convertir_fecha_local_a_utc(fecha_hora, conversaciones[chat_id]["datos"]["zona_horaria"])
 
             conversaciones[chat_id]["datos"]["fecha_hora"] = fecha_hora_utc.isoformat()
+            conversaciones[chat_id]["datos"]["fecha_hora_local"] = fecha_hora.isoformat()
         except ValueError:
             return ("Lo siento, no pude entender el formato de fecha y hora. Por favor, utiliza el formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
                     "Por ejemplo: 20/04/2025 15:30")
@@ -636,7 +637,7 @@ def generar_mensaje_confirmacion(chat_id):
     if datos.get("fecha_hora"):
         # Convertir ISO a objeto datetime y luego a formato legible
         try:
-            dt = datetime.fromisoformat(datos["fecha_hora"])
+            dt = datetime.fromisoformat(datos.get("fecha_hora_local", datos["fecha_hora"]))
             fecha_formateada = dt.strftime("%d/%m/%Y a las %H:%M")
             mensaje += f"🕒 *Fecha y hora:* {fecha_formateada}\n"
         except:
