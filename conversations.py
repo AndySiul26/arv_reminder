@@ -190,10 +190,16 @@ def guardar_datos(chat_id, nuevas_conversaciones = None, guardar_zona_horaria = 
 def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
     # [{'id': 23, 'chat_id': '54655066', 'usuario': 'Andy', 'nombre_tarea': 'Ir por licencia', 'descripcion': 'Documentacion', 'fecha_hora': '2025-06-06T09:06:00', 'creado_en': '2025-06-06T09:04:10.873179', 'notificado': True, 'aviso_constante': True, 'aviso_detenido': True, 'repetir': False, 'intervalo_repeticion': '', 'intervalos': 0, 'es_formato_utc': False}] 
     global conversaciones
-    recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
-    datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
-    data = datos_msg.get("result", None)
-    mensaje = ""
+    try:
+        recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
+        datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
+        data = datos_msg.get("result", None)
+        mensaje = ""
+    except Exception as e:
+        err_msg= f"Error al obtener recordatorios para mostrar lista al usuario ({chat_id})... Errores: " + str(e)
+        # Informar al admin
+        enviar_telegram(chat_id=tester_chat_id,tipo="texto", mensaje=err_msg)
+        print(err_msg)
 
     if recordatorios:
         if solo_pendientes:
