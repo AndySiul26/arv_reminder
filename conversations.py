@@ -101,7 +101,8 @@ def iniciar_recordatorio(chat_id, nombre_usuario):
     """Inicia un nuevo recordatorio para el usuario"""
     info_chat = supabase_db.obtener_info_chat(chat_id)
     conversaciones[chat_id].update({
-        "estado": ESTADO_NOMBRE_TAREA})
+        "estado": ESTADO_NOMBRE_TAREA,
+        "creacion_recordatorio":True})
     conversaciones[chat_id]["datos"].update({
             "usuario": nombre_usuario,
             "creado_en": utilidades.hora_utc_servidor_segun_zona_host().isoformat(),
@@ -164,7 +165,7 @@ def guardar_info_mensaje_enviado(chat_id, info, nuevas_conversaciones=None):
         print("Error al guardar info de mensaje enviado:", str(e))
     return None
 
-def guardar_datos(chat_id, nuevas_conversaciones = None):
+def guardar_datos(chat_id, nuevas_conversaciones = None, guardar_zona_horaria = False):
     # Usable fuera de este modulo
     global conversaciones
     if nuevas_conversaciones:
@@ -172,6 +173,13 @@ def guardar_datos(chat_id, nuevas_conversaciones = None):
         
     if chat_id in conversaciones:
         if "datos" in conversaciones[chat_id]:
+            if guardar_zona_horaria:
+                supabase_db.guardar_zona_horaria_chat(
+                    chat_id=chat_id,
+                    zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],
+                    nombre_chat=conversaciones[chat_id]["datos"]["usuario"],
+                    tipo="private"
+                )
             txt_datos = json.dumps(conversaciones[chat_id]["datos"], indent=4)  # `indent=4` para una salida más legible
             supabase_db.actualizar_estado_chat_id(chat_id=chat_id, numero_estado= CAMPO_GUARDADO_DATOS, nuevo_valor=txt_datos)
             return True
@@ -241,10 +249,10 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
         else:
             enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=mensaje, formato="markdown")
 
-def guardar_estado (chat_id, estado):
+def guardar_estado (chat_id, estado,guardar_zona_horaria=False):
     conversaciones[chat_id]["estado"] = estado
     supabase_db.actualizar_estado_chat_id(chat_id=chat_id,numero_estado=CAMPO_GUARDADO_ESTADO, nuevo_valor=estado)
-    guardar_datos(chat_id=chat_id)
+    guardar_datos(chat_id=chat_id, guardar_zona_horaria=guardar_zona_horaria)
 
 def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo = "Private", id_message = None, id_callback=None):
     """Procesa un mensaje del usuario según el estado de la conversación"""
@@ -264,6 +272,15 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=True)
     if texto.lower() in ["/recordatorios", "recordatorios"]:
         return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=False)
+    if texto.lower() in ["/cancelar", "cancelar"]:
+        if "editar" in conversaciones[chat_id].get("estado",""):
+            msg = "La edición del recordatorio ha sido cancelada"
+        elif conversaciones[chat_id].get("creacion_recordatorio", False):
+            msg = "La creación del recordatorio ha sido cancelada"
+        else:
+            msg = "Acción cancelada"
+        guardar_estado(chat_id=chat_id, estado="")
+        return msg
     elif texto.lower().strip() in ["parar","detener","alto"]:             
         return detener_avisos(chat_id)
     elif conversaciones[chat_id].get("estado", "") == "":            
@@ -300,6 +317,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             {"texto": "Repetir",       "data": "campo_repetir"},
             {"texto": "Intervalo",     "data": "campo_intervalo"},
             {"texto": "Aviso Const.",  "data": "campo_aviso_constante"},
+            {"texto": "Cancelar",  "data": "cancelar"},
         ]
         enviar_telegram(
             chat_id, tipo="botones",
@@ -393,6 +411,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
     elif estado_actual == ESTADO_ZONA_HORARIA_CONFIRMAR:
         if texto.lower() in ["si", "yes", "y", "s", "zona_confirmar"]:
+
             # Si venimos de nuestro flujo especial...
             if conversaciones[chat_id]["datos"].get("accion_post_zona") == "actualizar_recordatorios":
                 # 1) Guardar la zona en Supabase
@@ -406,9 +425,10 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                 # 4) Limpiar el flujo
                 del conversaciones[chat_id]
                 return msg
+            
 
             # si no era ese flujo, continuar normalmente…
-            guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA)
+            guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA, guardar_zona_horaria=True)
             return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora "
                     "en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\nPor ejemplo: 20/04/2025 15:30")
 
@@ -735,7 +755,8 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             return mensaje
         elif chat_id == tester_chat_id: # Si no y aparte el chat_id corresponde al tester entonces se le envia la información del nuevo comando callback que esta desarrollando
             enviar_telegram(f"DATO DE PRUEBA CALLBACK RETORNADO: {callback_data}")
-            return ""
+
+        return ""
         
     # Si el mensaje es vacio de la sección else anterior entonces solo se le envia al usuario "Opción no reconicida"
     return "Opción no reconocida."

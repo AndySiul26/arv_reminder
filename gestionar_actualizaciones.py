@@ -182,7 +182,8 @@ def menu_principal():
         print("2. Registrar nuevos chats si no existen")
         print("3. Obtener chats pendientes de actualización")
         print("4. Eliminar una actualización por ID")
-        print("5. Salir")
+        print("5. Obtener ultima actualización")
+        print("6. Salir")
 
         opcion = input("Seleccione una opción: ").strip()
 
@@ -195,6 +196,8 @@ def menu_principal():
         elif opcion == "4":
             eliminar_actualizacion_por_id()
         elif opcion == "5":
+            print(obtener_ultima_actualizacion())
+        elif opcion == "6":
             print("Saliendo del script.")
             break
         else:
