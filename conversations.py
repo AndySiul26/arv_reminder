@@ -94,7 +94,7 @@ def inicializar_conversaciones(chat_id, nombre_usuario=""):
                 "wait_callback":False # todas las funciones que terminen en enviar un mensaje con botones al usuario deben tener esta bandera en true, para que el manejo de callback lo mande al flujo general de conversaciones
             })
         
-        return conversaciones
+    return conversaciones
             
         
 def iniciar_recordatorio(chat_id, nombre_usuario):

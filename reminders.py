@@ -91,6 +91,7 @@ class AdministradorRecordatorios:
         """Envía un recordatorio al usuario y, si es repetible, crea el siguiente."""
         try:
             chat_id = recordatorio["chat_id"]
+            print("Buscando ", chat_id, " en las conversaciones... (Envio de recordatorio)")
             conversaciones = conversations.inicializar_conversaciones(chat_id=chat_id, nombre_usuario=recordatorio.get("usuario",""))
             
             aviso_constante = bool(recordatorio.get("aviso_constante", False))
