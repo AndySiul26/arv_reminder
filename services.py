@@ -7,25 +7,35 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-def enviar_telegram(chat_id, tipo="texto", **kwargs):
+def enviar_telegram(chat_id, tipo="texto", counter_recursivity=0, **kwargs):
     ret = None
+
     if tipo == "texto":
-        ret= enviar_mensaje_texto(chat_id, kwargs.get("mensaje"), kwargs.get("formato"))
+        ret = enviar_mensaje_texto(chat_id, kwargs.get("mensaje"), kwargs.get("formato"))
     elif tipo == "botones":
-        ret= enviar_mensaje_con_botones(chat_id, kwargs.get("mensaje"), kwargs.get("botones"), kwargs.get("formato"))
+        ret = enviar_mensaje_con_botones(chat_id, kwargs.get("mensaje"), kwargs.get("botones"), kwargs.get("formato"))
     elif tipo == "documento":
-        ret= enviar_documento(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
+        ret = enviar_documento(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
     elif tipo == "imagen":
-        ret= enviar_imagen(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
+        ret = enviar_imagen(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
     else:
         raise ValueError("Tipo de mensaje no soportado.")
     
-    # Funcion de guardado de datos 
+    if ret.status_code != 200:
+        if counter_recursivity < 2:
+            # Crear una copia modificada de kwargs sin "formato"
+            nuevos_kwargs = {k: v for k, v in kwargs.items() if k != "formato"}
+            return enviar_telegram(chat_id=chat_id, tipo=tipo, counter_recursivity=counter_recursivity+1, **nuevos_kwargs)
+        else:
+            return ret
+
+    # Ejecutar función opcional de guardado si se pasó
     guardar_datos = kwargs.pop("func_guardado_data", None)
     if guardar_datos:
         guardar_datos(chat_id, ret)
 
     return ret
+
 
 def enviar_mensaje_texto(chat_id, mensaje, formato=None):
     url = f"{BASE_URL}/sendMessage"
