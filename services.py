@@ -1,41 +1,97 @@
 import os
 import requests, json
 from dotenv import load_dotenv
+import re
+from html import escape
+import traceback
+
 
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+def contiene_url(texto):
+    """Detecta si el texto contiene una URL"""
+    return bool(re.search(r"https?://\S+", texto or ""))
+
+def markdown_a_html(texto):
+    """Convierte texto básico con enlaces Markdown a HTML escapado"""
+    if not texto:
+        return texto
+
+    # Escapar caracteres HTML
+    texto = escape(texto)
+
+    # Reemplazar enlaces tipo [texto](url) por <a href="url">texto</a>
+    texto = re.sub(r'\[(.*?)\]\((https?://\S+?)\)', r'<a href="\2">\1</a>', texto)
+
+    return texto
+
 def enviar_telegram(chat_id, tipo="texto", counter_recursivity=0, **kwargs):
-    ret = None
-
-    if tipo == "texto":
-        ret = enviar_mensaje_texto(chat_id, kwargs.get("mensaje"), kwargs.get("formato"))
-    elif tipo == "botones":
-        ret = enviar_mensaje_con_botones(chat_id, kwargs.get("mensaje"), kwargs.get("botones"), kwargs.get("formato"))
-    elif tipo == "documento":
-        ret = enviar_documento(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
-    elif tipo == "imagen":
-        ret = enviar_imagen(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
-    else:
-        raise ValueError("Tipo de mensaje no soportado.")
     
-    if ret.status_code != 200:
-        if counter_recursivity < 2:
-            # Crear una copia modificada de kwargs sin "formato"
-            nuevos_kwargs = {k: v for k, v in kwargs.items() if k != "formato"}
-            return enviar_telegram(chat_id=chat_id, tipo=tipo, counter_recursivity=counter_recursivity+1, **nuevos_kwargs)
+    ret = None
+    try:
+        formato = kwargs.get("formato", "").lower()
+
+        # Detectar campos con enlaces
+        campos_a_verificar = ["mensaje", "caption"]
+        if tipo == "botones":
+            campos_a_verificar.append("botones")
+
+        contiene_enlace = False
+        for campo in campos_a_verificar:
+            valor = kwargs.get(campo)
+
+            if isinstance(valor, str):
+                if contiene_url(valor):
+                    contiene_enlace = True
+                    break
+            elif isinstance(valor, list):
+                if any(isinstance(item, str) and contiene_url(item) for item in valor):
+                    contiene_enlace = True
+                    break
+
+        # Si hay enlaces y se usa markdown, convertir a HTML
+        if contiene_enlace and formato == "markdown":
+            if "mensaje" in kwargs:
+                kwargs["mensaje"] = markdown_a_html(kwargs["mensaje"])
+            if "caption" in kwargs:
+                kwargs["caption"] = markdown_a_html(kwargs["caption"])
+            if "botones" in kwargs and isinstance(kwargs["botones"], list):
+                # Si los botones contienen texto con enlaces
+                kwargs["botones"] = [markdown_a_html(b) if isinstance(b, str) else b for b in kwargs["botones"]]
+
+            kwargs["formato"] = "html"
+
+        # Envío según tipo
+        if tipo == "texto":
+            ret = enviar_mensaje_texto(chat_id, kwargs.get("mensaje"), kwargs.get("formato"))
+        elif tipo == "botones":
+            ret = enviar_mensaje_con_botones(chat_id, kwargs.get("mensaje"), kwargs.get("botones"), kwargs.get("formato"))
+        elif tipo == "documento":
+            ret = enviar_documento(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
+        elif tipo == "imagen":
+            ret = enviar_imagen(chat_id, kwargs.get("ruta"), kwargs.get("caption", ""), kwargs.get("formato"))
         else:
-            return ret
+            raise ValueError("Tipo de mensaje no soportado.")
+        
+        # Reintento si falla
+        if ret.status_code != 200:
+            if counter_recursivity < 2:
+                nuevos_kwargs = {k: v for k, v in kwargs.items() if k != "formato"}
+                return enviar_telegram(chat_id=chat_id, tipo=tipo, counter_recursivity=counter_recursivity + 1, **nuevos_kwargs)
+            else:
+                return ret
 
-    # Ejecutar función opcional de guardado si se pasó
-    guardar_datos = kwargs.pop("func_guardado_data", None)
-    if guardar_datos:
-        guardar_datos(chat_id, ret)
+        # Guardado opcional
+        guardar_datos = kwargs.pop("func_guardado_data", None)
+        if guardar_datos:
+            guardar_datos(chat_id, ret)
 
+    except Exception as e:
+        print("Error desde enviar_telegram: ", str(e))
     return ret
-
 
 def enviar_mensaje_texto(chat_id, mensaje, formato=None):
     url = f"{BASE_URL}/sendMessage"
@@ -95,30 +151,44 @@ def guardar_diccionario(diccionario):
         print(f"Ocurrió un error al guardar el diccionario: {e}")
 
 def editar_mensaje_texto(chat_id, message_id, nuevo_texto, formato=None, guardar_datos=None, counter_recursivity=0):
-    url = f"{BASE_URL}/editMessageText"
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": nuevo_texto
-    }
-    if formato:
-        payload["parse_mode"] = formato
-    ret= requests.post(url, json=payload)
-    if ret.status_code != 200:
-        if counter_recursivity<2:
-            ret = editar_mensaje_texto(chat_id=chat_id, message_id=message_id, nuevo_texto=nuevo_texto, formato=None, guardar_datos=guardar_datos, counter_recursivity=counter_recursivity+1)
-        else:
-            return ret
-        # ret = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=nuevo_texto, formato=formato)
+    try:
+        if formato and formato.lower().startswith("markdown") and contiene_url(nuevo_texto):
+            formato = None
 
-    # Funcion de guardado de datos 
-    
-    if guardar_datos:
-        guardar_datos(chat_id, ret)
+        url = f"{BASE_URL}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": nuevo_texto
+        }
 
-    return ret
+        if formato:
+            payload["parse_mode"] = formato
 
-def editar_mensaje_con_botones(chat_id, message_id, nuevo_mensaje, nuevos_botones, formato=None, guardar_datos= None):
+        ret = requests.post(url, json=payload)
+
+        if ret.status_code != 200 and counter_recursivity < 2:
+            return editar_mensaje_texto(
+                chat_id=chat_id,
+                message_id=message_id,
+                nuevo_texto=nuevo_texto,
+                formato=None,
+                guardar_datos=guardar_datos,
+                counter_recursivity=counter_recursivity + 1
+            )
+
+        if guardar_datos:
+            guardar_datos(chat_id, ret)
+
+        return ret
+
+    except Exception as e:
+        print(f"[ERROR] editar_mensaje_texto - {str(e)}")
+        print(traceback.format_exc())
+        return None
+
+
+def editar_mensaje_con_botones(chat_id, message_id, nuevo_mensaje, nuevos_botones, formato=None, guardar_datos=None, counter_recursivity=0):
     """
     Edita el texto y los botones de un mensaje previamente enviado por el bot.
 
@@ -129,27 +199,57 @@ def editar_mensaje_con_botones(chat_id, message_id, nuevo_mensaje, nuevos_botone
     - nuevos_botones: Lista de botones con estructura [{"texto": "Aceptar", "data": "accion_aceptar"}, ...].
     - formato: (Opcional) "HTML" o "MarkdownV2" para aplicar formato.
     """
-    url = f"{BASE_URL}/editMessageText"
-    keyboard = {
-        "inline_keyboard": [[{"text": b["texto"], "callback_data": b["data"]}] for b in nuevos_botones]
-    }
+    try:
+        contiene_enlace = False
 
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": nuevo_mensaje,
-        "reply_markup": keyboard
-    }
+        if contiene_url(nuevo_mensaje):
+            contiene_enlace = True
+        elif isinstance(nuevos_botones, list):
+            for b in nuevos_botones:
+                if contiene_url(b.get("texto", "")):
+                    contiene_enlace = True
+                    break
 
-    if formato:
-        payload["parse_mode"] = formato
+        if formato and formato.lower().startswith("markdown") and contiene_enlace:
+            formato = None
 
-    ret = requests.post(url, json=payload)
+        url = f"{BASE_URL}/editMessageText"
+        keyboard = {
+            "inline_keyboard": [[{"text": b["texto"], "callback_data": b["data"]}] for b in nuevos_botones]
+        }
 
-    if guardar_datos:
-        guardar_datos(chat_id, ret)
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": nuevo_mensaje,
+            "reply_markup": keyboard
+        }
 
-    return ret
+        if formato:
+            payload["parse_mode"] = formato
+
+        ret = requests.post(url, json=payload)
+
+        if ret.status_code != 200 and counter_recursivity < 2:
+            return editar_mensaje_con_botones(
+                chat_id=chat_id,
+                message_id=message_id,
+                nuevo_mensaje=nuevo_mensaje,
+                nuevos_botones=nuevos_botones,
+                formato=None,
+                guardar_datos=guardar_datos,
+                counter_recursivity=counter_recursivity + 1
+            )
+
+        if guardar_datos:
+            guardar_datos(chat_id, ret)
+
+        return ret
+
+    except Exception as e:
+        print(f"[ERROR] editar_mensaje_con_botones - {str(e)}")
+        print(traceback.format_exc())
+        return None
 
 def editar_botones_mensaje(chat_id, message_id, nuevos_botones, guardar_datos=None):
     """
@@ -160,22 +260,29 @@ def editar_botones_mensaje(chat_id, message_id, nuevos_botones, guardar_datos=No
     - message_id: ID del mensaje que se desea editar.
     - nuevos_botones: Lista de botones con estructura [{"texto": "Aceptar", "data": "accion_aceptar"}, ...].
     """
-    url = f"{BASE_URL}/editMessageReplyMarkup"
-    keyboard = {
-        "inline_keyboard": [[{"text": b["texto"], "callback_data": b["data"]}] for b in nuevos_botones]
-    }
+    try:
+        url = f"{BASE_URL}/editMessageReplyMarkup"
+        keyboard = {
+            "inline_keyboard": [[{"text": b["texto"], "callback_data": b["data"]}] for b in nuevos_botones]
+        }
 
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "reply_markup": keyboard
-    }
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": keyboard
+        }
 
-    ret = requests.post(url, json=payload)
-    if guardar_datos:
-        guardar_datos(chat_id, ret)
+        ret = requests.post(url, json=payload)
 
-    return ret
+        if guardar_datos:
+            guardar_datos(chat_id, ret)
+
+        return ret
+
+    except Exception as e:
+        print(f"[ERROR] editar_botones_mensaje - {str(e)}")
+        print(traceback.format_exc())
+        return None
 
 
 def eliminar_mensaje(chat_id, message_id):
