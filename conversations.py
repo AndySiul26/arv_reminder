@@ -254,6 +254,39 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
         else:
             enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=mensaje, formato="markdown")
 
+def comprobacion_asignacion_fecha_hora(chat_id, raw):
+    texto = raw.lower()
+    
+    # Caso 1: Si existe ":" en el texto
+    if ":" in texto:
+        num, intervalo = texto.split(":")
+        if num.isdigit() and intervalo in ["s", "x", "h", "d", "w", "m", "a"]:
+            numero = int(num)
+            # Pasar al estado de aviso constante
+            conversaciones[chat_id]["datos"]["intervalos"] = numero
+            conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
+            guardar_estado(chat_id=chat_id, estado=ESTADO_AVISO_CONSTANTE)
+            return True, generar_mensaje_aviso_constante(chat_id)
+    
+    # Caso 2: Si no existe ":" en el texto, comprobar desde el final
+    else:
+        unidades_tiempo_aceptadas = ["s", "x", "h", "d", "w", "m", "a"]
+        for i, char in enumerate(reversed(texto)):
+            if char in unidades_tiempo_aceptadas:
+                intervalo = char
+                num = texto[:-i-1]  # Todo lo que está a la izquierda del carácter
+                if num.isdigit():
+                    numero = int(num)
+                    # Asignar a conversaciones
+                    conversaciones[chat_id]["datos"]["intervalos"] = numero
+                    conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
+                    guardar_estado(chat_id=chat_id, estado=ESTADO_AVISO_CONSTANTE)
+                    return True, generar_mensaje_aviso_constante(chat_id)
+                break  # Si se encontró una unidad de tiempo, no seguir buscando
+    
+    # Si no se cumple ninguna condición
+    return False, "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"
+
 def guardar_estado (chat_id, estado,guardar_zona_horaria=False):
     conversaciones[chat_id]["estado"] = estado
     supabase_db.actualizar_estado_chat_id(chat_id=chat_id,numero_estado=CAMPO_GUARDADO_ESTADO, nuevo_valor=estado)
@@ -358,7 +391,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             "campo_repetir":      "¿Repetir? (si/no):",
             "campo_intervalo":     (
                                         "¿Con qué frecuencia deseas que se repita el recordatorio?\n"
-                                        "Escribe el intervalo en el siguiente formato: `1:d`\n\n"
+                                        "Escribe el intervalo en el siguiente formato: `1:d o 1d`\n\n"
                                         "*Símbolos válidos:*\n"
                                         "`x` - minutos\n"
                                         "`h` - horas\n"
@@ -366,7 +399,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                                         "`w` - semanas\n"
                                         "`m` - meses\n"
                                         "`a` - años\n\n"
-                                        "*Ejemplo:* `2:h` significa cada 2 horas"
+                                        "*Ejemplo:* `2:h` o `2h` significa cada 2 horas"
                                     ),
         }.get(campo_sel, "Escribe el nuevo valor:")
         enviar_telegram(chat_id, tipo="texto", mensaje=prompt, func_guardado_data=guardar_info_mensaje_enviado, formato="markdown")
@@ -398,13 +431,16 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         # — ACTUALIZAR CON FUNCIÓN CENTRALIZADA —
         if campo=="campo_intervalo":
             try:
-                num, intervalo = texto.lower().split(":")
-                if num.isdigit() and intervalo in ["s", "x", "h", "d", "w", "m", "a"]:
-                    numero = int(num)
-                    conversaciones[chat_id]["datos"]["intervalos"] = numero
-                    conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
-                    # Pasar al estado de aviso constante
-                    exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": num, "intervalo_repeticion": intervalo})
+                    datos = utilidades.extraer_numero_intervalo(texto)
+                    if datos:
+                        numero, intervalo = datos["numero"], datos["intervalo"]
+                        conversaciones[chat_id]["datos"]["intervalos"] = numero
+                        conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
+                        # Pasar al estado de aviso constante
+                        exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": num, "intervalo_repeticion": intervalo})
+                    else:
+                        print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
+                        return "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"        
             except Exception as e:
                 print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
                 return "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"
@@ -545,21 +581,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             return "Disculpa, no entendi tu respuesta, ¿puedes volver a escribirla?"
 
     elif estado_actual == ESTADO_INTERVALO_REPETICION:
-        numero = ""
-        if ":" in texto.lower():
-            num, intervalo = texto.lower().split(":")
-            if num.isdigit() and intervalo in ["s", "x", "h", "d", "w", "m", "a"]:
-                numero = int(num)
-                # Pasar al estado de aviso constante
-                conversaciones[chat_id]["datos"]["intervalos"] = numero
-                conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
-                guardar_estado(chat_id=chat_id,estado= ESTADO_AVISO_CONSTANTE)
-                
-                return generar_mensaje_aviso_constante(chat_id)
-            
-        if numero == "":
-            return "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"
-
+        realizado, msg = comprobacion_asignacion_fecha_hora(chat_id=chat_id, raw=texto)
+        return msg
     elif estado_actual == ESTADO_AVISO_CONSTANTE:
         if texto.lower() in ["sí", "si", "s", "yes", "y", "confirmar"]:
             conversaciones[chat_id]["datos"]["aviso_constante"] = True
@@ -887,7 +910,7 @@ def generar_mensaje_intervalo_repeticion(chat_id):
     conversaciones[chat_id]["wait_callback"] = False
     mensaje = (
         "¿Con qué frecuencia deseas que se repita el recordatorio?\n"
-        "Escribe el intervalo en el siguiente formato: `1:d`\n\n"
+        "Escribe el intervalo en el siguiente formato: `1:d o 1d`\n\n"
         "*Símbolos válidos:*\n"
         "`x` - minutos\n"
         "`h` - horas\n"
@@ -895,7 +918,7 @@ def generar_mensaje_intervalo_repeticion(chat_id):
         "`w` - semanas\n"
         "`m` - meses\n"
         "`a` - años\n\n"
-        "*Ejemplo:* `2:h` significa cada 2 horas"
+        "*Ejemplo:* `2:h` o `2h` significa cada 2 horas"
     )
 
     if not conversaciones[chat_id].get("id_callback", False):
@@ -985,3 +1008,12 @@ def pedir_zona_horaria_y_actualizar_recordatorios(chat_id, nombre_usuario):
 
     # Envío real de botones
     return pedir_zona_horaria(chat_id, actualizacion_recordatorios=True)
+
+
+if __name__ == "__main__":
+    chat_id = 4541
+    conversaciones[chat_id]={
+        "datos": {}
+    }
+    texto = "1h"
+    comprobacion_asignacion_fecha_hora(chat_id=chat_id, raw=texto)

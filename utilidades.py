@@ -104,6 +104,49 @@ def sumar_hora_servidor(zona_horaria,minutos=0, horas=0, dias=0, semanas=0)-> da
   fh_l = convertir_fecha_utc_a_local(fecha_utc=fh_s, zona_horaria=zona_horaria)
   return fh_l
 
+def extraer_numero_intervalo(raw):
+    texto = raw.lower()
+    unidades_tiempo_aceptadas = ["s", "x", "h", "d", "w", "m", "a"]
+    
+    # Caso 1: Si existe ":" en el texto
+    if ":" in texto:
+        num, intervalo = texto.split(":")
+        if num.isdigit() and intervalo in unidades_tiempo_aceptadas:
+            return {"numero": int(num), "intervalo": intervalo}
+    
+    # Caso 2: Si no existe ":" en el texto, comprobar desde el final
+    else:
+        for i, char in enumerate(reversed(texto)):
+            if char in unidades_tiempo_aceptadas:
+                intervalo = char
+                num = texto[:-i-1]  # Todo lo que está a la izquierda del carácter
+                if num.isdigit():
+                    return {"numero": int(num), "intervalo": intervalo}
+                break  # Si se encontró una unidad de tiempo, no seguir buscando
+    
+    # Si no se cumple ninguna condición
+    return {}
 
 if __name__ == "__main__":
-    print(hora_utc_servidor_segun_zona_host().isoformat())
+    # print(hora_utc_servidor_segun_zona_host().isoformat())
+    # Ejemplo 1: Con ":"
+    raw_con_punto_y_coma = "5:d"
+    resultado_con_punto_y_coma = extraer_numero_intervalo(raw_con_punto_y_coma)
+    print("Resultado con ':' :", resultado_con_punto_y_coma)
+
+    # Ejemplo 2: Sin ":"
+    raw_sin_punto_y_coma = "10h"
+    resultado_sin_punto_y_coma = extraer_numero_intervalo(raw_sin_punto_y_coma)
+    print("Resultado sin ':' :", resultado_sin_punto_y_coma)
+
+    numero, intervalo = resultado_sin_punto_y_coma["numero"], resultado_sin_punto_y_coma["intervalo"]
+
+    # Ejemplo 3: Formato Inválido
+    raw_invalido = "abc"
+    resultado_invalido = extraer_numero_intervalo(raw_invalido)
+    print("Resultado con formato inválido :", resultado_invalido)
+
+    if resultado_invalido:
+        print("Es valido?")
+    else:
+        print("Es INVALIDO")
