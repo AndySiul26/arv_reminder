@@ -206,7 +206,8 @@ class AdministradorRecordatorios:
             print(f"Error al enviar recordatorio: {e}")
 
     def verificar_actualizaciones(self):
-        """Verifica y envía actualizaciones de bot a los chats correspondientes"""
+        """Verifica y envía actualizaciones de bot a los chats correspondientes y realiza un ping al servidor monitor para mantenerlo vivo"""
+        ping_otro_servidor()
         print(f"[{datetime.now().isoformat()}] Verificando actualizaciones...")
         try:
             registrar_chats_si_no_existen()
@@ -239,6 +240,8 @@ class AdministradorRecordatorios:
 
         except Exception as e:
             print(f"Error al verificar actualizaciones: {e}")
+        
+
 
     def corregir_recordatorios(self):
         """
