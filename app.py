@@ -3,6 +3,7 @@
 import os
 import atexit
 import signal
+import sys
 from dotenv import load_dotenv
 from flask import Flask
 from utilidades import env_to_bool, set_webhook_local_with_ngrok, set_webhook_remoto
@@ -10,7 +11,6 @@ from utilidades import env_to_bool, set_webhook_local_with_ngrok, set_webhook_re
 from supabase_db import inicializar_supabase, actualizar_modo_tester, leer_modo_tester
 from reminders import iniciar_administrador, detener_administrador
 from routes import routes  # nuestro nuevo módulo de rutas
-# import sys
 
 MODO_TESTER = False
 
