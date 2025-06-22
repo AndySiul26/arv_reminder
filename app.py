@@ -15,7 +15,6 @@ import sys
 MODO_TESTER = False
 
 LOCAL_MODE: bool = utilidades.env_to_bool("LOCAL_MODE")
-USE_NGROK_LOCAL: bool = utilidades.env_to_bool("USE_NGROK_LOCAL")
 
 load_dotenv()
 
@@ -42,6 +41,7 @@ signal.signal(signal.SIGTERM, lambda s,f: cerrar_aplicacion())
 
 # Si deseas ejecutar con python app.py (descomenta):
 if __name__ == "__main__" and LOCAL_MODE:
+    USE_NGROK_LOCAL: bool = utilidades.env_to_bool("USE_NGROK_LOCAL")
     if USE_NGROK_LOCAL:
         if not utilidades.set_webhook_local_with_ngrok():
             print("❌ Falló la configuración del webhook local. Terminando el servidor.")
