@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import os
+import time
+import requests
+import webhook_utils
 
 zona_servidor = os.environ.get("ZONA_SERVIDOR", "UTC")
 
@@ -127,26 +130,97 @@ def extraer_numero_intervalo(raw):
     # Si no se cumple ninguna condición
     return {}
 
+def env_to_bool(env_var, true_values=['true', '1', 'yes']):
+    valor = os.getenv(env_var, False)
+    return valor in true_values
+    
+def lanzar_ngrok_cmd(puerto=5000):
+    """
+    Lanza ngrok en una nueva ventana de consola (cmd) visible.
+    """
+    comando = f'start cmd /k "ngrok http {puerto}"'
+    os.system(comando)
+    time.sleep(3)  # Le damos tiempo a que la consola arranque
+
+def obtener_url_ngrok(reintentos=5, espera=2):
+    """
+    Intenta obtener la URL pública de ngrok haciendo polling a su API local.
+    """
+    for _ in range(reintentos):
+        try:
+            resp = requests.get('http://127.0.0.1:4040/api/tunnels')
+            data = resp.json()
+            for tunel in data['tunnels']:
+                if tunel['proto'] == 'https':
+                    return tunel['public_url']
+            return data['tunnels'][0]['public_url'] if data['tunnels'] else None
+        except:
+            time.sleep(espera)
+    return None
+
+def iniciar_ngrok_y_obtener_url(puerto=5000):
+    """
+    Función principal: lanza ngrok, obtiene la URL pública y la copia al portapapeles.
+    """
+    lanzar_ngrok_cmd(puerto)
+    print("Esperando a que ngrok levante el túnel...")
+
+    url = obtener_url_ngrok()
+
+    if url:
+        print(f"✔ URL pública de ngrok: {url}")
+    else:
+        print("❌ No se pudo obtener la URL pública de ngrok.")
+
+    return url
+
+
+def set_webhook_local_with_ngrok():
+    url = iniciar_ngrok_y_obtener_url()
+    if webhook_utils.set_webhook(url):
+        print("Servidor ngrok corriendo y url webhook establecida...")
+        return True
+    else:
+        print("Servidor ngrok fallo...")
+        return False
+
+def set_webhook_remoto():
+    webhook_url= os.getenv("WEB_HOOK_URL_REMOTE")
+    if webhook_utils.set_webhook(webhook_url):
+        print("Servidor remoto corriendo y url webhook establecida...")
+        return True
+    else:
+        print("Servidor remoto fallo al establecerse para telegram...")
+        return False
+
 if __name__ == "__main__":
     # print(hora_utc_servidor_segun_zona_host().isoformat())
-    # Ejemplo 1: Con ":"
-    raw_con_punto_y_coma = "5:d"
-    resultado_con_punto_y_coma = extraer_numero_intervalo(raw_con_punto_y_coma)
-    print("Resultado con ':' :", resultado_con_punto_y_coma)
+    cual = 2
+    match cual:
+      case 1:
+        # Ejemplo 1: Con ":"
+        raw_con_punto_y_coma = "5:d"
+        resultado_con_punto_y_coma = extraer_numero_intervalo(raw_con_punto_y_coma)
+        print("Resultado con ':' :", resultado_con_punto_y_coma)
 
-    # Ejemplo 2: Sin ":"
-    raw_sin_punto_y_coma = "10h"
-    resultado_sin_punto_y_coma = extraer_numero_intervalo(raw_sin_punto_y_coma)
-    print("Resultado sin ':' :", resultado_sin_punto_y_coma)
+        # Ejemplo 2: Sin ":"
+        raw_sin_punto_y_coma = "10h"
+        resultado_sin_punto_y_coma = extraer_numero_intervalo(raw_sin_punto_y_coma)
+        print("Resultado sin ':' :", resultado_sin_punto_y_coma)
 
-    numero, intervalo = resultado_sin_punto_y_coma["numero"], resultado_sin_punto_y_coma["intervalo"]
+        numero, intervalo = resultado_sin_punto_y_coma["numero"], resultado_sin_punto_y_coma["intervalo"]
 
-    # Ejemplo 3: Formato Inválido
-    raw_invalido = "abc"
-    resultado_invalido = extraer_numero_intervalo(raw_invalido)
-    print("Resultado con formato inválido :", resultado_invalido)
+        # Ejemplo 3: Formato Inválido
+        raw_invalido = "abc"
+        resultado_invalido = extraer_numero_intervalo(raw_invalido)
+        print("Resultado con formato inválido :", resultado_invalido)
 
-    if resultado_invalido:
-        print("Es valido?")
-    else:
-        print("Es INVALIDO")
+        if resultado_invalido:
+            print("Es valido?")
+        else:
+            print("Es INVALIDO")
+      case 2:
+        print(set_webhook_remoto())
+        # Ya tienes la URL pública disponible en la variable `url`
+        time.sleep (6)
+        

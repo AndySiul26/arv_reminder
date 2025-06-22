@@ -95,7 +95,22 @@ def inicializar_conversaciones(chat_id, nombre_usuario=""):
             })
         
     return conversaciones
-            
+
+def obtener_recordatorios_aviso_constante(chat_id) -> bool:
+    global conversaciones
+    try:
+        info_recordatorios_avisos_constantes = supabase_db.leer_estado_chat_id(chat_id=chat_id, numero_estado=CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE)
+        if info_recordatorios_avisos_constantes:
+            conversaciones[chat_id]["recordatorios_aviso_constante"] = json.loads(info_recordatorios_avisos_constantes)
+        else:
+            conversaciones[chat_id]["recordatorios_aviso_constante"] = {}
+            return False
+    except Exception as e:
+        print("Error al obtener los recordatorios de aviso constante: ", str(e))
+        return False
+
+    return True
+
         
 def iniciar_recordatorio(chat_id, nombre_usuario):
     """Inicia un nuevo recordatorio para el usuario"""
@@ -812,7 +827,11 @@ def guardar_recordatorio(chat_id, datos):
             return False
         
 def modificar_mensajes_avisos_a_detenidos(chat_id):
+    global conversaciones
     if "recordatorios_aviso_constante" in conversaciones[chat_id]:
+        # Obtener ultimos recordatorios del servidor
+        if not obtener_recordatorios_aviso_constante(chat_id=chat_id):
+            return False
         recordatorios = conversaciones[chat_id]["recordatorios_aviso_constante"]
         for r in recordatorios:
             recordatorio = recordatorios[r]
@@ -823,6 +842,9 @@ def modificar_mensajes_avisos_a_detenidos(chat_id):
             texto = f'El recordatorio con el nombre de {nombre_tarea} y descripción "{descripcion}", ¡ha sido detenido exitosamente!'
             editar_mensaje_texto (chat_id=chat_id, message_id=last_id_message, 
                                   nuevo_texto= texto)
+        # Todos los recordatorios avisados
+        supabase_db.actualizar_estado_chat_id(chat_id=chat_id, numero_estado= CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE, nuevo_valor="")
+        conversaciones[chat_id]["recordatorios_aviso_constante"] = {}
             
 def detener_avisos(chat_id):
     """ Detiene los avisos actuales del usuario"""
