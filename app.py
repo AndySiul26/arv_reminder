@@ -39,19 +39,19 @@ signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())
 signal.signal(signal.SIGTERM, lambda s,f: cerrar_aplicacion())
 
 # Si deseas ejecutar con python app.py (descomenta):
-if __name__ == "__main__" and LOCAL_MODE:
-    USE_NGROK_LOCAL: bool = env_to_bool("USE_NGROK_LOCAL")
-    if USE_NGROK_LOCAL:
-        if not set_webhook_local_with_ngrok():
-            print("❌ Falló la configuración del webhook local. Terminando el servidor.")
-            os._exit(0)
-    Modo_Tester(MODO_TESTER)
-    app.run(debug=True, use_reloader=False)
-else:
-    if not set_webhook_remoto():
-        print("❌ Falló la configuración del webhook remoto. Terminando el servidor.")
-        os._exit(0)
-    else:
-        print("Servidor remoto establecido...")
+# if __name__ == "__main__" and LOCAL_MODE:
+#     USE_NGROK_LOCAL: bool = env_to_bool("USE_NGROK_LOCAL")
+#     if USE_NGROK_LOCAL:
+#         if not set_webhook_local_with_ngrok():
+#             print("❌ Falló la configuración del webhook local. Terminando el servidor.")
+#             os._exit(0)
+#     Modo_Tester(MODO_TESTER)
+#     app.run(debug=True, use_reloader=False)
+# else:
+#     if not set_webhook_remoto():
+#         print("❌ Falló la configuración del webhook remoto. Terminando el servidor.")
+#         os._exit(0)
+#     else:
+#         print("Servidor remoto establecido...")
 
 # IMPLEMENTAR ACTUALIZACION DE SERVIDORES CADA MINUTO PARA QUE LOS PROYECTOS NO SE DUERMAN (REALIZADO)
