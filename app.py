@@ -3,7 +3,6 @@
 import os
 import atexit
 import signal
-import sys
 from dotenv import load_dotenv
 from flask import Flask
 from utilidades import env_to_bool, set_webhook_local_with_ngrok, set_webhook_remoto
@@ -45,13 +44,13 @@ if __name__ == "__main__" and LOCAL_MODE:
     if USE_NGROK_LOCAL:
         if not set_webhook_local_with_ngrok():
             print("❌ Falló la configuración del webhook local. Terminando el servidor.")
-            sys.exit(1)
+            os._exit(0)
     Modo_Tester(MODO_TESTER)
     app.run(debug=True, use_reloader=False)
 else:
     if not set_webhook_remoto():
         print("❌ Falló la configuración del webhook remoto. Terminando el servidor.")
-        sys.exit(1)
+        os._exit(0)
     else:
         print("Servidor remoto establecido...")
 
