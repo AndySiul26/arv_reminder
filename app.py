@@ -27,6 +27,12 @@ def cerrar_aplicacion():
     print("Cerrando aplicación...")
     detener_administrador()
     print("Recursos liberados")
+    print("Estableciendo servidor remoto...")
+    
+    if LOCAL_MODE:
+        # REGRESAR A SETTEAR URL REMOTA
+        from utilidades import set_webhook_remoto
+        set_webhook_remoto()    
     os._exit(0)
 
 # Al arrancar la aplicación
@@ -47,6 +53,7 @@ if __name__ == "__main__" and LOCAL_MODE:
             os._exit(0)
     Modo_Tester(MODO_TESTER)
     app.run(debug=True, use_reloader=False)
+    
 
 
 # IMPLEMENTAR ACTUALIZACION DE SERVIDORES CADA MINUTO PARA QUE LOS PROYECTOS NO SE DUERMAN (REALIZADO)

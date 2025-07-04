@@ -244,7 +244,7 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
                 mensaje += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
                 mensaje += f"  🔁 Repetible: {'Sí' if r['repetir'] else 'No'}\n"
                 if r['repetir']:
-                    mensaje += f"  ⌚ Intervalo: Cada {r['intervalos']} {r['intervalo_repeticion']}\n"
+                    mensaje += f"  ⌚ Intervalo: Cada {r['intervalos']} {significado_tiempo(r['intervalo_repeticion'], (r['intervalos'] > 1))}\n"
                 mensaje += f"  🔔 Aviso constante: {'Sí' if r['aviso_constante'] else 'No'}\n\n"
                 
         except Exception as e:
@@ -452,7 +452,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                         conversaciones[chat_id]["datos"]["intervalos"] = numero
                         conversaciones[chat_id]["datos"]["intervalo_repeticion"] = intervalo
                         # Pasar al estado de aviso constante
-                        exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": num, "intervalo_repeticion": intervalo})
+                        exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": numero, "intervalo_repeticion": intervalo})
                     else:
                         print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
                         return "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"        

@@ -142,7 +142,7 @@ def lanzar_ngrok_cmd(puerto=5000):
     os.system(comando)
     time.sleep(3)  # Le damos tiempo a que la consola arranque
 
-def obtener_url_ngrok(reintentos=5, espera=2):
+def obtener_url_ngrok(reintentos=6, espera=3):
     """
     Intenta obtener la URL pública de ngrok haciendo polling a su API local.
     """
