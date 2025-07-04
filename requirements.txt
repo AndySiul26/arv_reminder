@@ -6,3 +6,4 @@ schedule
 python-telegram-bot
 gunicorn
 tzdata
+dateparser

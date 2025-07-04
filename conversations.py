@@ -454,7 +454,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                         # Pasar al estado de aviso constante
                         exito = actualizar_campos_recordatorio(recordatorio_id=record_id,campos= {"intervalos": numero, "intervalo_repeticion": intervalo})
                     else:
-                        print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
+                        print("Errores en la actualización de los campos de repeticion de intervalo")
                         return "Error, sintaxis incorrecta, escribe el intervalo como por ejemplo 1:d (simbolos: s=segundos, x=minutos, h=horas, d=dias, m=meses, a=años)"        
             except Exception as e:
                 print("Errores en la actualización de los campos de repeticion de intervalo: ", str(e))
@@ -462,9 +462,11 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         elif campo == "campo_fecha_hora":
             # Comprobación de que la fecha y hora sea mayor que la actual
             try:
-                fecha_hora = datetime.strptime(raw, "%d/%m/%Y %H:%M")
-                fecha_hora_utc = utilidades.convertir_fecha_local_a_utc(fecha_hora, conversaciones[chat_id]["datos"]["zona_horaria"])
                 
+                fecha_hora = utilidades.normalizar_fecha_a_datetime(raw)
+                fecha_hora_utc = utilidades.normalizar_fecha_a_datetime(raw, zona_horaria_local= conversaciones[chat_id]["datos"]["zona_horaria"])
+                if not fecha_hora_utc or not fecha_hora:
+                    raise ValueError(f"No se pudo interpretar la fecha: '{raw}'")
                 # Comprobar si la hora y fecha elegida son mayores a las actuales
                 fecha_hora_utc_servidor = utilidades.hora_utc_servidor_segun_zona_host()
                 if fecha_hora_utc_servidor < fecha_hora_utc: # Es importante que la fecha del recordatorio sea estrictamente mayor
@@ -559,8 +561,10 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             
             # Intentar parsear la fecha y hora y convertirla a UTC desde la fecha y hora local que se nos proporciono
             try:
-                fecha_hora = datetime.strptime(texto, "%d/%m/%Y %H:%M")
-                fecha_hora_utc = utilidades.convertir_fecha_local_a_utc(fecha_hora, conversaciones[chat_id]["datos"]["zona_horaria"])
+                fecha_hora = utilidades.normalizar_fecha_a_datetime(texto)
+                fecha_hora_utc = utilidades.normalizar_fecha_a_datetime(texto, zona_horaria_local= conversaciones[chat_id]["datos"]["zona_horaria"])
+                if not fecha_hora_utc or not fecha_hora:
+                    raise ValueError(f"No se pudo interpretar la fecha: '{texto}'")
                 
                 # Comprobar si la hora y fecha elegida son mayores a las actuales
                 fecha_hora_utc_servidor = utilidades.hora_utc_servidor_segun_zona_host()

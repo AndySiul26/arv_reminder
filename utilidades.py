@@ -4,6 +4,7 @@ import os
 import time
 import requests
 import webhook_utils
+import dateparser
 
 zona_servidor = os.environ.get("ZONA_SERVIDOR", "UTC")
 
@@ -174,6 +175,24 @@ def iniciar_ngrok_y_obtener_url(puerto=5000):
 
     return url
 
+def normalizar_fecha_a_datetime(texto_fecha: str, idioma='es', zona_horaria_local = "") -> datetime | None:
+    """
+    Parsea una fecha en texto y devuelve un objeto datetime normalizado (sin segundos y en formato 24h).
+
+    :param texto_fecha: Fecha como texto (en casi cualquier formato).
+    :param idioma: Idioma del texto (por defecto 'es' para español).
+    :return: Objeto datetime con minutos (sin segundos) o None si no se pudo interpretar.
+    """
+    dt = dateparser.parse(texto_fecha, languages=[idioma])
+    if dt:
+        if zona_horaria_local!= "":
+            # Elimina los segundos y microsegundos para coincidir con "%d/%m/%Y %H:%M"
+            return convertir_fecha_local_a_utc(dt.replace(second=0, microsecond=0), zona_horaria=zona_horaria_local)
+        else:
+            # Elimina los segundos y microsegundos para coincidir con "%d/%m/%Y %H:%M"
+            return dt.replace(second=0, microsecond=0)
+
+    return None
 
 def set_webhook_local_with_ngrok():
     url = iniciar_ngrok_y_obtener_url()
@@ -195,7 +214,7 @@ def set_webhook_remoto():
 
 if __name__ == "__main__":
     # print(hora_utc_servidor_segun_zona_host().isoformat())
-    cual = 2
+    cual = 3
     match cual:
       case 1:
         # Ejemplo 1: Con ":"
@@ -223,4 +242,9 @@ if __name__ == "__main__":
         print(set_webhook_remoto())
         # Ya tienes la URL pública disponible en la variable `url`
         time.sleep (6)
-        
+      case 3:
+        fecha_hora = "25/06/2025 4:00 p.m."
+        fh_utc_dt = normalizar_fecha_a_datetime(fecha_hora)
+        if fh_utc_dt:
+            fh_utc_str = fh_utc_dt.strftime("%d/%m/%Y a las %H:%M")
+        print(fh_utc_str)
