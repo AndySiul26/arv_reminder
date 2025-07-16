@@ -847,7 +847,7 @@ def modificar_mensajes_avisos_a_detenidos(chat_id):
             editar_mensaje_texto (chat_id=chat_id, message_id=last_id_message, 
                                   nuevo_texto= texto)
         # Todos los recordatorios avisados
-        supabase_db.actualizar_estado_chat_id(chat_id=chat_id, numero_estado= CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE, nuevo_valor="")
+        supabase_db.actualizar_estado_chat_id(chat_id=chat_id, numero_estado= CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE, nuevo_valor="{}")
         conversaciones[chat_id]["recordatorios_aviso_constante"] = {}
             
 def detener_avisos(chat_id):
