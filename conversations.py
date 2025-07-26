@@ -840,10 +840,11 @@ def modificar_mensajes_avisos_a_detenidos(chat_id):
         for r in recordatorios:
             recordatorio = recordatorios[r]
             last_id_message = recordatorio["last_id_message"]
-            # usuario = recordatorio["usuario"]
+            usuario = recordatorio["usuario"]
             nombre_tarea = recordatorio["nombre_tarea"]
             descripcion = recordatorio["descripcion"]
             texto = f'El recordatorio con el nombre de {nombre_tarea} y descripción "{descripcion}", ¡ha sido detenido exitosamente!'
+            print(f"Modificando aviso de {usuario} llamado '{nombre_tarea}': ")
             editar_mensaje_texto (chat_id=chat_id, message_id=last_id_message, 
                                   nuevo_texto= texto)
         # Todos los recordatorios avisados
