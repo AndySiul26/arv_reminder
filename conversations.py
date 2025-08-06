@@ -338,10 +338,12 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         else:
             msg = "Acción cancelada"
         if conversaciones[chat_id]["id_callback"]:
-            editar_mensaje_texto(chat_id=chat_id,
+            ret = editar_mensaje_texto(chat_id=chat_id,
                                  message_id=conversaciones[chat_id]["id_callback"],
                                  nuevo_texto=msg)
-            msg =""
+            if ret:
+                if ret.ok:
+                    msg =""
 
         guardar_estado(chat_id=chat_id, estado="")
         return msg
