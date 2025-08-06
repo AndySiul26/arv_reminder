@@ -5,6 +5,8 @@ from supabase_db import actualizar_campos_recordatorio  # IMPORT
 import utilidades, os
 import json
 
+import plantillas
+
 # Guarda la última vez (UTC) que pedimos zona para cada chat
 _last_zona_request: dict[str, datetime] = {}
 
@@ -132,6 +134,7 @@ def iniciar_recordatorio(chat_id, nombre_usuario):
 
 def iniciar_edicion(chat_id, nombre_usuario):
     """Inicia el flujo de edición de recordatorio, verificando zona antes."""
+    
     # 1) Comprobar zona horaria
     info = supabase_db.obtener_info_chat(chat_id)
     if not info or not info.get("zona_horaria"):
@@ -204,6 +207,8 @@ def guardar_datos(chat_id, nuevas_conversaciones = None, guardar_zona_horaria = 
 def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
     # [{'id': 23, 'chat_id': '54655066', 'usuario': 'Andy', 'nombre_tarea': 'Ir por licencia', 'descripcion': 'Documentacion', 'fecha_hora': '2025-06-06T09:06:00', 'creado_en': '2025-06-06T09:04:10.873179', 'notificado': True, 'aviso_constante': True, 'aviso_detenido': True, 'repetir': False, 'intervalo_repeticion': '', 'intervalos': 0, 'es_formato_utc': False}] 
     global conversaciones
+    recordatorios=None
+    data=None
     try:
         recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
         datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
@@ -332,6 +337,12 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             msg = "La creación del recordatorio ha sido cancelada"
         else:
             msg = "Acción cancelada"
+        if conversaciones[chat_id]["id_callback"]:
+            editar_mensaje_texto(chat_id=chat_id,
+                                 message_id=conversaciones[chat_id]["id_callback"],
+                                 nuevo_texto=msg)
+            msg =""
+
         guardar_estado(chat_id=chat_id, estado="")
         return msg
     elif texto.lower().strip() in ["parar","detener","alto"]:             
@@ -417,7 +428,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                                         "*Ejemplo:* `2:h` o `2h` significa cada 2 horas"
                                     ),
         }.get(campo_sel, "Escribe el nuevo valor:")
-        enviar_telegram(chat_id, tipo="texto", mensaje=prompt, func_guardado_data=guardar_info_mensaje_enviado, formato="markdown")
+        # enviar_telegram(chat_id, tipo="texto", mensaje=prompt, func_guardado_data=guardar_info_mensaje_enviado, formato="markdown")
+        editar_mensaje_texto(chat_id=chat_id, message_id= conversaciones[chat_id]["id_callback"], nuevo_texto=prompt, formato="markdown",guardar_datos=guardar_info_mensaje_enviado)
         return ""
 
      # — FLUJO DE RECEPCIÓN DE NUEVO VALOR —
@@ -435,7 +447,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                                       utilidades.convertir_a_iso_utc(raw, datos)),
             "campo_repetir":         ("repetir", raw.lower() in ["si","s","yes","y"]),
             "campo_intervalo":       ("intervalo_repeticion", raw),
-            "campo_aviso_constante": ("aviso_constante", raw.lower() in ["si","s","yes","y"])
+            "campo_aviso_constante": ("aviso_constante", raw.lower() in ["si","s","yes","y"]),
+            "campo_repeticion_intervalo_confirmar_previo": ("confirmar", raw.lower() in ["si","s","yes","y"])
         }
         col, val = col_val_mapping.get(campo, (None, None))
         
@@ -443,8 +456,38 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             enviar_telegram(chat_id, tipo="texto", mensaje="Error de campo. Intenta de nuevo.",func_guardado_data=guardar_info_mensaje_enviado)
             return ""
 
+        nombre_tarea = conversaciones[chat_id].get('datos', {}).get('record_data',{}).get('nombre_tarea', "")
         # — ACTUALIZAR CON FUNCIÓN CENTRALIZADA —
-        if campo=="campo_intervalo":
+        if campo == "campo_repetir":
+            try:
+
+                exito = actualizar_campos_recordatorio(record_id, {col: val})
+                
+                if exito and val:
+                    intervalo_repeticion = conversaciones[chat_id].get('datos', {}).get('record_data',{}).get('intervalo_repeticion', "")
+                    intervalos = conversaciones[chat_id].get('datos', {}).get('record_data',{}).get('intervalos', 0)
+
+                    if intervalo_repeticion!="":
+                        conversaciones[chat_id]["datos"]["campo_sel"] = "campo_repeticion_intervalo_confirmar_previo"
+                        msg_intervalo_confirmacion = f"*cada* {intervalos} {significado_tiempo(intervalo_repeticion, (intervalos > 1))}"
+                        enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=plantillas.MSG.EDITAR_CAMPO_REPETICION_EDITAR_INTERVALO_PREVIO(intervalo=msg_intervalo_confirmacion),func_guardado_data=guardar_info_mensaje_enviado, formato="markdown")
+                    else:
+                        conversaciones[chat_id]["datos"]["campo_sel"] = "campo_intervalo"
+                        enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=plantillas.MSG.EDITAR_CAMPO_REPETICION_EDITAR_INTERVALO_NUEVO(nombre_recordatorio=nombre_tarea),func_guardado_data=guardar_info_mensaje_enviado)
+                    
+                    return ""
+
+            except Exception as e:
+                print(f"Error al editar campo_repetir con el usuario {chat_id}: {str(e)}")
+                return f"Error al editar el campo de repetición del recordatorio"
+        elif campo=="campo_repeticion_intervalo_confirmar_previo":
+            if not val:
+                conversaciones[chat_id]["datos"]["campo_sel"] = "campo_intervalo"
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=plantillas.MSG.EDITAR_CAMPO_REPETICION_EDITAR_INTERVALO_NUEVO(nombre_recordatorio=nombre_tarea),func_guardado_data=guardar_info_mensaje_enviado)
+                return ""
+            else:
+                exito=True
+        elif campo=="campo_intervalo":
             try:
                     datos = utilidades.extraer_numero_intervalo(texto)
                     if datos:

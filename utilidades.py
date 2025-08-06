@@ -147,6 +147,7 @@ def obtener_url_ngrok(reintentos=6, espera=3):
     """
     Intenta obtener la URL pública de ngrok haciendo polling a su API local.
     """
+    regreso = None
     for _ in range(reintentos):
         try:
             resp = requests.get('http://127.0.0.1:4040/api/tunnels')
@@ -154,7 +155,10 @@ def obtener_url_ngrok(reintentos=6, espera=3):
             for tunel in data['tunnels']:
                 if tunel['proto'] == 'https':
                     return tunel['public_url']
-            return data['tunnels'][0]['public_url'] if data['tunnels'] else None
+            regreso = data['tunnels'][0]['public_url'] if data['tunnels'] else None
+            if not regreso:
+                time.sleep(espera)
+
         except:
             time.sleep(espera)
     return None
