@@ -1,9 +1,12 @@
+import threading
+# ... el resto de tus importaciones mod detener avisos
 from datetime import datetime, timedelta
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 import utilidades, os
 import json
+
 
 import plantillas
 
@@ -896,20 +899,51 @@ def modificar_mensajes_avisos_a_detenidos(chat_id):
         supabase_db.actualizar_estado_chat_id(chat_id=chat_id, numero_estado= CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE, nuevo_valor="{}")
         conversaciones[chat_id]["recordatorios_aviso_constante"] = {}
             
-def detener_avisos(chat_id):
-    """ Detiene los avisos actuales del usuario"""
-    from supabase_db import cambiar_estado_aviso_detenido 
-    
-    if cambiar_estado_aviso_detenido(chat_id, True):
-        msg = "Han sido detenidos los avisos"
+# NUEVA FUNCIÓN PARA EJECUTAR EN SEGUNDO PLANO
+def _detener_avisos_background(chat_id, message_id):
+    """
+    Esta función contiene la lógica lenta que se ejecutará en un hilo separado.
+    """
+    from supabase_db import cambiar_estado_aviso_detenido
+
+    # 1. Actualiza la base de datos para detener futuros avisos
+    exito = cambiar_estado_aviso_detenido(chat_id, True)
+
+    if exito:
+        # 2. Edita los mensajes que ya fueron enviados
+        modificar_mensajes_avisos_a_detenidos(chat_id)
+        # 3. Edita el mensaje de "Procesando..." para confirmar que todo terminó
+        editar_mensaje_texto(chat_id, message_id, "✅ ¡Listo! Todos los avisos constantes han sido detenidos.")
     else:
-        msg= "No se pudieron detener los avisos"
+        # Informa al usuario si algo salió mal
+        editar_mensaje_texto(chat_id, message_id, "❌ Hubo un error al intentar detener los avisos.")
 
-    print("Modificar mensajes a detenidos...")
 
-    modificar_mensajes_avisos_a_detenidos(chat_id)
+# FUNCIÓN PRINCIPAL MODIFICADA
+def detener_avisos(chat_id):
+    """
+    Detiene los avisos del usuario de forma asíncrona.
+    """
+    # 1. Envía un mensaje inmediato para que el usuario sepa que recibimos la orden.
+    #    Guardamos la respuesta para obtener el message_id y poder editarlo después.
+    respuesta_inicial = enviar_telegram(chat_id, tipo="texto", mensaje="⌛ Deteniendo avisos, por favor espera...")
+    
+    if respuesta_inicial and respuesta_inicial.ok:
+        try:
+            message_id = respuesta_inicial.json()["result"]["message_id"]
 
-    return msg
+            # 2. Crea y arranca el hilo para el trabajo pesado
+            thread = threading.Thread(
+                target=_detener_avisos_background,
+                args=(chat_id, message_id)
+            )
+            thread.start()
+        except (KeyError, ValueError) as e:
+            print(f"Error al obtener message_id para detener avisos: {e}")
+            return "Ocurrió un error al procesar tu solicitud."
+
+    # 3. Retorna una cadena vacía para no enviar un segundo mensaje desde el flujo principal.
+    return ""
 
 def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback):
     """Procesa los callbacks de los botones inline"""
