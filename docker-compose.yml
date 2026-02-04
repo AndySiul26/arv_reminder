@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  arv_reminder_bot:
+    container_name: arv_reminder_bot
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5500:5500"
+    env_file:
+      - .env
+    environment:
+      - PORT=5500
+      # Ensure this matches your actual domain
+      - WEBHOOK_URL=https://arvreminder.virtualdigitalprint.com/webhook
+      - LOCAL_MODE=false
+    volumes:
+      # Mount the code for easier hot-reloading if needed (optional for production, good for debug)
+      # In pure production, you might remove this to rely solely on the image copy
+      - ./:/app
