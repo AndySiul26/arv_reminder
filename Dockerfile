@@ -9,9 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-# curl is needed for the webhook setup in entrypoint.sh
+# curl and openssl are needed for webhook setup and ssl generation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies
@@ -25,8 +26,8 @@ COPY . .
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Expose the port the app runs on
-EXPOSE 5500
+# Expose the Telegram-compatible SSL port
+EXPOSE 8443
 
 # Define the entrypoint
 ENTRYPOINT ["./entrypoint.sh"]

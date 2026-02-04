@@ -4,12 +4,13 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "5500:5500"
+      # Map host 8443 to container 8443 (Required by Telegram)
+      - "8443:8443"
     env_file:
       - .env
     environment:
-      - PORT=5500
-      # Ensure this matches your actual domain
-      - WEBHOOK_URL=https://arvreminder.virtualdigitalprint.com/webhook
+      - PORT=8443
+      # NOTE: Must include the port 8443 in the URL
+      - WEBHOOK_URL=https://arvreminder.virtualdigitalprint.com:8443/webhook
       - LOCAL_MODE=false
-    # Volumes removed to prevent shadowing of image file permissions (entrypoint.sh +x)
+    # Volumes removed to prevent permission issues
