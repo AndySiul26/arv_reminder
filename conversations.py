@@ -418,7 +418,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         prompt = {
             "campo_nombre_tarea": "Escribe el *nuevo nombre* de la tarea:",
             "campo_descripcion":  "Escribe la *nueva descripción*:",
-            "campo_fecha_hora":   "Escribe la *nueva fecha y hora* (DD/MM/YYYY HH:MM [Formato de 24 horas]):",
+            "campo_fecha_hora":   "Escribe la *nueva fecha y hora* (Ej: `25/12/2026 4:00 pm` o `25/12/2026 16:00`).\n*Nota:* Se guardará en formato de 24 horas.",
             "campo_repetir":      "¿Repetir? (si/no):",
             "campo_intervalo":     (
                                         "¿Con qué frecuencia deseas que se repita el recordatorio?\n"
@@ -527,12 +527,12 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                                                             })
                 else:
                     # La fecha y hora del recordatorio es pasada o actual.
-                    return ("Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
-                            "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+                    "Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
+                            "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
             except ValueError:
                 # Este mensaje se mantiene para cuando el formato de fecha es incorrecto
-                return ("Lo siento, no pude entender el formato de fecha y hora. Por favor, utiliza el formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
-                        "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+                return ("Lo siento, no pude entender el formato de fecha y hora. Puedes usar formatos como `DD/MM/YYYY 4:00 PM` o `16:00`.\n"
+                        "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
         else:
             exito = actualizar_campos_recordatorio(record_id, {col: val})
 
@@ -565,8 +565,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             enviar_telegram(tester_chat_id,tipo="texto",mensaje="ATENCIÓN, NO SE ESTA GUARDANDO INFO DEL CHAT_ID " + chat_id, formato="", func_guardado_data=guardar_info_mensaje_enviado)
             
         guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA)
-        return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
-                "Por ejemplo: " +  utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+        return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora (Ej: `25/12/2026 4:00 pm`).\n"
+                "Por ejemplo: " +  utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
     
     elif estado_actual == ESTADO_ZONA_HORARIA:
         if texto in ZONAS_HORARIAS:
@@ -598,7 +598,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             # si no era ese flujo, continuar normalmente…
             guardar_estado(chat_id=chat_id,estado= ESTADO_FECHA_HORA, guardar_zona_horaria=True)
             return ("¿Cuándo necesitas que te recuerde esta tarea? Por favor, indica la fecha y hora "
-                    "en formato DD/MM/YYYY HH:MM [Formato de 24 horas].\nPor ejemplo:" + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+                    "(Ej: `25/12/2026 4:00 pm` o `16:00`).\n"
+                    "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
 
         else:
             # usuario quiere cambiarla
@@ -621,13 +622,13 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                     conversaciones[chat_id]["datos"]["fecha_hora_local"] = fecha_hora.isoformat()
                 else:
                     # La fecha y hora del recordatorio es pasada o actual.
-                    return ("Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
-                            "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+            return ("Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
+                    "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
 
             except ValueError:
                 # Este mensaje se mantiene para cuando el formato de fecha es incorrecto
-                return ("Lo siento, no pude entender el formato de fecha y hora. Por favor, utiliza el formato DD/MM/YYYY HH:MM [Formato de 24 horas].\n"
-                        "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %H:%M")) 
+                return ("Lo siento, no pude entender el formato de fecha y hora. Puedes usar formatos como `DD/MM/YYYY 4:00 PM` o `16:00`.\n"
+                        "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
             
             # Pasar al estado de confirmación
             guardar_estado(chat_id=chat_id,estado= ESTADO_REPETIR)
