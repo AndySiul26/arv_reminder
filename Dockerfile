@@ -10,9 +10,11 @@ ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 # curl and openssl are needed for webhook setup and ssl generation
+# tzdata is needed for TIMEZONE configuration
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     openssl \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies

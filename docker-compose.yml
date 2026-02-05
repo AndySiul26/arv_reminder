@@ -13,4 +13,7 @@ services:
       # NOTE: Must include the port 8443 in the URL
       - WEBHOOK_URL=https://arvreminder.virtualdigitalprint.com:8443/webhook
       - LOCAL_MODE=false
+      # Timezone Configuration (Important for correct reminder scheduling)
+      - TZ=${TZ:-UTC}
+      - ZONA_SERVIDOR=${ZONA_SERVIDOR:-UTC}
     # Volumes removed to prevent permission issues
