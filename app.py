@@ -36,8 +36,15 @@ def cerrar_aplicacion():
     os._exit(0)
 
 # Al arrancar la aplicación
-inicializar_supabase()
-iniciar_administrador()
+db_ok = inicializar_supabase()
+
+if not db_ok:
+    print("⚠️  ADVERTENCIA: No se pudo conectar a Supabase. Iniciando en MODO MANTENIMIENTO.")
+    app.config['MAINTENANCE_MODE'] = True
+else:
+    print("✅  Conexión a base de datos exitosa.")
+    app.config['MAINTENANCE_MODE'] = False
+    iniciar_administrador()
 # Registrar cierre limpio
 atexit.register(cerrar_aplicacion)
 signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())

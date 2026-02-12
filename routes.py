@@ -26,10 +26,32 @@ def telegram_webhook():
     data = request.get_json()
     print("Mensaje entrante...")
 
-    if "message" in data:
-        return manejar_mensaje(data)
-    elif "callback_query" in data:
-        return manejar_callback(data)
+    # --- MODO MANTENIMIENTO ---
+    # Si la app arrancó sin base de datos, interceptamos todo aquí.
+    from flask import current_app
+    if current_app.config.get('MAINTENANCE_MODE'):
+        print("⚠️ MODO MANTENIMIENTO ACTIVO")
+        # Permitir solo webhook verification (si data es vacía o rara) o comandos básicos si se desea
+        # Pero para simplicidad, chequeamos el contenido del mensaje
+        if "message" in data:
+            msg = data["message"]
+            chat_id = str(msg["chat"]["id"])
+            text = msg.get("text", "")
+            
+            # Permitir /ayuda o /start para que el usuario no sienta que el bot murió
+            if text.startswith("/ayuda") or text.startswith("/start"):
+                # Dejamos pasar para que 'manejar_mensaje' lo procese (que no usa DB para esto)
+                pass 
+            else:
+                 # Responder con mensaje de mantenimiento y cortar
+                enviar_telegram(chat_id, tipo="texto", mensaje="⚠️ *Servicio en Mantenimiento*\n\nEstamos experimentando problemas de conexión con la base de datos. El equipo ya está trabajando en ello.\n\nPor favor intenta más tarde.")
+                return "ok", 200
+        elif "callback_query" in data:
+             # Responder a callbacks con alerta
+             cb = data["callback_query"]
+             chat_id = str(cb["from"]["id"])
+             enviar_telegram(chat_id, tipo="texto", mensaje="⚠️ Servicio en mantenimiento. Intenta más tarde.")
+             return "ok", 200
     return "ok", 200
 
 def manejar_mensaje(data):

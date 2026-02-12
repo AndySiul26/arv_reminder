@@ -5,7 +5,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from utilidades import hora_utc_servidor_segun_zona_host
 from services import enviar_telegram
+import socket
 import time
+
+# Set global timeout for all socket operations (including Supabase HTTP requests)
+# to prevent the app from hanging indefinitely during outages.
+socket.setdefaulttimeout(5)
 
 ADMIN_CHAT_ID = "6934945886"
 _last_admin_notification_time = 0
