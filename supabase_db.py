@@ -35,11 +35,20 @@ def inicializar_supabase():
     
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("Conexión con Supabase establecida")
+        
+        # Intentar una operación ligera para validar la conexión real
+        # create_client es "lazy" y no conecta hasta que se hace una petición.
+        print("Validando conexión con Supabase...")
+        # Intentamos leer la tabla de modo tester (que es pequeña)
+        supabase.table("modo_tester").select("id").limit(1).execute()
+        
+        print("✅ Conexión con Supabase establecida y verificada.")
         return True
     except Exception as e:
-        print(f"Error al conectar con Supabase: {e}")
-        notificar_error_base_datos(e)
+        print(f"❌ Error al conectar con Supabase (inicio fallido): {e}")
+        # No notificamos por Telegram aquí porque si falla al inicio, 
+        # app.py activará el MODO MANTENIMIENTO global.
+        # notificar_error_base_datos(e) 
         return False
 
 def notificar_error_base_datos(e, chat_id_usuario=None):
