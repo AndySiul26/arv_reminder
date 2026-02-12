@@ -11,7 +11,13 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+import socket
+
 load_dotenv()
+
+# Set global timeout for all socket operations (including Supabase HTTP requests)
+# to prevent the script from hanging indefinitely during outages.
+socket.setdefaulttimeout(15)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY_SERVICE_ROLE")
