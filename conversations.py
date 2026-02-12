@@ -622,8 +622,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                     conversaciones[chat_id]["datos"]["fecha_hora_local"] = fecha_hora.isoformat()
                 else:
                     # La fecha y hora del recordatorio es pasada o actual.
-            return ("Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
-                    "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
+                    return ("Lo siento, la fecha y hora para el recordatorio debe ser en el futuro. Por favor, elige una fecha y hora posterior a la actual.\n"
+                            "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
 
             except ValueError:
                 # Este mensaje se mantiene para cuando el formato de fecha es incorrecto
