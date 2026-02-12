@@ -4,6 +4,12 @@ from supabase import create_client, Client
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from utilidades import hora_utc_servidor_segun_zona_host
+from services import enviar_telegram
+import time
+
+ADMIN_CHAT_ID = "6934945886"
+_last_admin_notification_time = 0
+NOTIFICATION_COOLDOWN = 300  # 5 minutes
 
 load_dotenv()
 
@@ -28,7 +34,40 @@ def inicializar_supabase():
         return True
     except Exception as e:
         print(f"Error al conectar con Supabase: {e}")
+        notificar_error_base_datos(e)
         return False
+
+def notificar_error_base_datos(e, chat_id_usuario=None):
+    """
+    Notifica errores críticos de base de datos al administrador y al usuario afectado.
+    Incluye rate limiting para evitar spam al admin.
+    """
+    global _last_admin_notification_time
+    
+    current_time = time.time()
+    
+    # 1. Notificar al Admin (con rate limit)
+    if current_time - _last_admin_notification_time > NOTIFICATION_COOLDOWN:
+        try:
+            msg_admin = f"⚠️ *ALERTA DE BASE DE DATOS*\n\nError crítico en Supabase:\n`{str(e)}`\n\n_Notificación enviada automáticamente._"
+            enviar_telegram(ADMIN_CHAT_ID, tipo="texto", mensaje=msg_admin, formato="Markdown")
+            _last_admin_notification_time = current_time
+            print(f"🚨 Notificación de error enviada al admin {ADMIN_CHAT_ID}")
+        except Exception as err:
+            print(f"Error al notificar al admin: {err}")
+
+    # 2. Notificar al Usuario (si corresponde)
+    if chat_id_usuario:
+        try:
+            msg_user = (
+                "⚠️ *Servicio Intermitente*\n\n"
+                "Lo siento, estamos teniendo problemas para conectar con nuestro servidor de datos (Supabase) en este momento.\n"
+                "El equipo de desarrollo ya ha sido notificado automáticamente y estamos trabajando para solucionarlo.\n\n"
+                "Por favor, intenta tu acción nuevamente en unos minutos."
+            )
+            enviar_telegram(chat_id_usuario, tipo="texto", mensaje=msg_user, formato="Markdown")
+        except Exception as err:
+            print(f"Error al notificar al usuario {chat_id_usuario}: {err}")
 
 def guardar_recordatorio(datos):
     """Guarda un nuevo recordatorio en Supabase con todos los campos necesarios."""
@@ -65,6 +104,7 @@ def guardar_recordatorio(datos):
 
     except Exception as e:
         print(f"Error al guardar recordatorio en Supabase: {e}")
+        notificar_error_base_datos(e, datos.get("chat_id"))
         return False
 
 
@@ -275,6 +315,7 @@ def obtener_recordatorios_usuario(chat_id):
     
     except Exception as e:
         print(f"Error al obtener recordatorios del usuario: {e}")
+        notificar_error_base_datos(e, chat_id)
         return []
     
 def eliminar_recordatorios_finalizados():
@@ -363,6 +404,7 @@ def upsert_chat_info(chat_id: str, nombre: str, tipo: str, zona_horaria: str = N
 
     except Exception as e:
         print(f"❌ Error en upsert_chat_info: {e}")
+        notificar_error_base_datos(e, chat_id)
         return False
 
 def guardar_zona_horaria_chat(chat_id: str, zona_horaria: str, nombre_chat:str, tipo:str) -> bool:
