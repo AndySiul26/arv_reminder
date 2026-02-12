@@ -629,7 +629,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                 return ("Lo siento, no pude entender el formato de fecha y hora. Puedes usar formatos como `DD/MM/YYYY 4:00 PM` o `16:00`.\n"
                         "Por ejemplo: " + utilidades.sumar_hora_servidor(zona_horaria=conversaciones[chat_id]["datos"]["zona_horaria"],minutos=10).strftime("%d/%m/%Y %I:%M %p")) 
             
-            # Pasar al estado de confirmación
+            # Pasar al estado de confirmación [*]
             guardar_estado(chat_id=chat_id,estado= ESTADO_REPETIR)
             return generar_mensaje_repetir(chat_id)
     elif estado_actual == ESTADO_REPETIR:
