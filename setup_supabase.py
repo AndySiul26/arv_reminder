@@ -216,12 +216,25 @@ def crear_tabla_chats_id_estados(supabase: Client):
 
 if __name__ == "__main__":
     print("Configurando base de datos en Supabase...")
-    cliente = create_client(SUPABASE_URL, SUPABASE_KEY)
-    if crear_tabla_recordatorios(cliente):
-        crear_tablas_actualizaciones(cliente)
-        crear_tabla_chats_info(cliente)
-        crear_tabla_modo_tester(cliente)
-        crear_tabla_chats_id_estados(cliente)
-        print("✅ Configuración completada con éxito")
-    else:
-        print("❌ Error en la configuración")
+    try:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+             print("⚠️  Advertencia: Definiendo cliente nulo por falta de credenciales.")
+             cliente = None
+        else:
+             cliente = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        if cliente:
+            crear_tabla_recordatorios(cliente)
+            crear_tablas_actualizaciones(cliente)
+            crear_tabla_chats_info(cliente)
+            crear_tabla_modo_tester(cliente)
+            crear_tabla_chats_id_estados(cliente)
+            print("✅ Configuración completada con éxito")
+        else:
+             print("⚠️ Salto de configuración por cliente nulo.")
+
+    except Exception as e:
+        print(f"⚠️  Advertencia: Falló la configuración inicial de Supabase (posible caída del servicio).")
+        print(f"   Detalle: {e}")
+        print("   -> Continuando ejecución para permitir arranque en Modo Mantenimiento.")
+        # No hacemos exit(1) para que el contenedor NO se detenga.
