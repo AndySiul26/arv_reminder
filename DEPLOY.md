@@ -25,29 +25,26 @@ git push origin main
 
 2.  **Clona el repositorio** (o haz pull si ya existe):
     ```bash
-    git clone https://github.com/AndySiul26/arv_reminder.git
     cd arv_reminder
-    # O si ya existe:
-    # cd arv_reminder && git pull origin main
+    git pull origin main
     ```
 
-3.  **Crea el archivo `.env`**:
-    Este archivo no se sube a GitHub por seguridad. Créalo manualmente con tus claves:
+3.  **Configura el archivo `.env`** (si no existe):
     ```bash
     nano .env
     ```
-    Pega el contenido (ajusta con tus valores reales):
-    ```ini
-    TELEGRAM_TOKEN=tu_token_aqui
-    SUPABASE_URL=tu_supabase_url
-    SUPABASE_KEY_SERVICE_ROLE=tu_supabase_key
-    WEB_HOOK_URL_REMOTE=https://arvreminder.virtualdigitalprint.com/webhook
-    LOCAL_MODE=false
-    ```
-    *Guarda con `Ctrl+O`, `Enter`, y sal con `Ctrl+X`.*
+    (Asegúrate de tener las claves correctas y `LOCAL_MODE=false`)
 
-4.  **Levanta el Contenedor**:
+4.  **IMPORTANTE: Crear archivo de base de datos**
+    Para evitar errores con Docker, crea el archivo vacío antes de iniciar:
     ```bash
+    touch local_backup.db
+    ```
+    *Nota: El bot sincronizará los datos desde Supabase automáticamente.*
+
+5.  **Levanta el Contenedor**:
+    ```bash
+    docker compose down
     docker compose up -d --build
     ```
     
@@ -55,7 +52,7 @@ git push origin main
     ```bash
     docker logs arv_reminder_bot
     ```
-    Deberías ver: `🌟 Starting Gunicorn Server on port 5500...`
+    Deberías ver: `🌟 Starting Gunicorn Server on port 8443...`
 
 ## Paso 3: Configurar SSL y Dominio (El Proxy)
 

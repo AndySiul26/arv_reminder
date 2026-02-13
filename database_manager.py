@@ -239,9 +239,37 @@ class DatabaseManager:
         """Obtiene recordatorios pendientes de notificar desde LOCAL."""
         with self.get_local_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM recordatorios WHERE notificado = 0")
+            # MODIFICADO: Ahora incluye los que deben sonar constantemente (aviso_constante=1 AND aviso_detenido=0)
+            # Aunque ya hayan sido notificados una vez (notificado=1).
+            # La lógica de tiempo se maneja en reminders.py (o aquí si fuera más complejo)
+            # Por ahora traemos TODOs candidatos y filtramos fecha allá.
+            cursor.execute('''
+                SELECT * FROM recordatorios 
+                WHERE notificado = 0 
+                   OR (aviso_constante = 1 AND aviso_detenido = 0)
+            ''')
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
+
+    def detener_avisos_constantes(self, chat_id: str) -> bool:
+        """Detiene los avisos constantes para un chat en local y encola sync."""
+        try:
+            with self.get_local_connection() as conn:
+                # Marcar como detenidos todos los avisos constantes ACTIVOS de este chat
+                cursor = conn.execute('''
+                    UPDATE recordatorios 
+                    SET aviso_detenido = 1, sync_status = 'pending_update', last_updated = ?
+                    WHERE chat_id = ? AND aviso_constante = 1 AND aviso_detenido = 0
+                ''', (datetime.utcnow().isoformat(), str(chat_id)))
+                
+                rows = cursor.rowcount
+                conn.commit()
+            
+            logger.info(f"Detenidos {rows} avisos constantes para chat {chat_id} (Local).")
+            return True
+        except Exception as e:
+            logger.error(f"Error al detener avisos constantes localmente: {e}")
+            return False
 
     def marcar_como_notificado(self, recordatorio_id: int):
         """Marca como notificado en local y encolar sync a remoto."""
@@ -392,18 +420,38 @@ class DatabaseManager:
                 except Exception as e:
                     logger.error(f"Error subiendo insert {row['id']}: {e}")
 
-            # 3. Procesar Modificaciones (Updates - ej: notificado)
+            # 3. Procesar Modificaciones (Updates - ej: notificado, aviso_detenido)
             cursor = conn.execute("SELECT * FROM recordatorios WHERE sync_status = 'pending_update'")
             pendientes = cursor.fetchall()
             for row in pendientes:
                 if row['supabase_id']:
                     try:
-                        # Si es solo marcar notificado
-                        if row['notificado']:
-                            supabase_db.marcar_como_notificado(row['supabase_id'])
+                        exito = False
+                        # Casos de update:
                         
-                        self._actualizar_estado_sync_recordatorio(row['id'], 'synced', row['supabase_id'])
-                        logger.info(f"Update local {row['id']} subido a Supabase.")
+                        # Caso A: Detener avisos constantes (aviso_detenido=1)
+                        if row['aviso_detenido'] == 1 and row['aviso_constante'] == 1:
+                            # Usamos la función optimizada de supabase_db si existe, o update genérico
+                            # supabase_db.cambiar_estado_aviso_detenido usa logic de batch por chat_id,
+                            # pero aquí vamos registro por registro.
+                            # Mejor actualizar campos específicos.
+                            exito = supabase_db.actualizar_campos_recordatorio(row['supabase_id'], {"aviso_detenido": True})
+                        
+                        # Caso B: Marcar como Notificado (notificado=1)
+                        # Nota: Si ambos flags cambiaron, hacemos ambos updates.
+                        if row['notificado'] == 1:
+                             # Re-verificamos si ya se hizo update arriba para no duplicar si 'actualizar_campos' es genérico?
+                             # supabase_db.marcar_como_notificado hace solo eso.
+                             if not exito: # Si no se actualizó arriba
+                                 exito = supabase_db.marcar_como_notificado(row['supabase_id'])
+                             else:
+                                 # Ya se actualizó algo, aseguramos que notificado también esté (o hacemos un update combinado)
+                                 # Por simplicidad, mandamos el segundo update si es necesario
+                                 supabase_db.marcar_como_notificado(row['supabase_id'])
+                                 
+                        if exito:
+                            self._actualizar_estado_sync_recordatorio(row['id'], 'synced', row['supabase_id'])
+                            logger.info(f"Update local {row['id']} subido a Supabase.")
                     except Exception as e:
                         logger.error(f"Error subiendo update {row['id']}: {e}")
             

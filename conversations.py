@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
+from database_manager import db_manager
 import utilidades, os
 import json
 
@@ -904,15 +905,19 @@ def _detener_avisos_background(chat_id, message_id):
     """
     Esta función contiene la lógica lenta que se ejecutará en un hilo separado.
     """
-    from supabase_db import cambiar_estado_aviso_detenido
+    # from supabase_db import cambiar_estado_aviso_detenido # YA NO SE USA DIRECTO
 
-    # 1. Actualiza la base de datos para detener futuros avisos
-    exito = cambiar_estado_aviso_detenido(chat_id, True)
+    # 1. Actualiza la base de datos LOCAL para detener futuros avisos
+    #    y encola la sincronización.
+    exito = db_manager.detener_avisos_constantes(chat_id)
 
     if exito:
-        # 2. Edita los mensajes que ya fueron enviados
+        # 2. Forzamos subida inmediata a Supabase para que no se pierda si se reinicia
+        db_manager.sincronizar_local_a_remoto()
+
+        # 3. Edita los mensajes que ya fueron enviados
         modificar_mensajes_avisos_a_detenidos(chat_id)
-        # 3. Edita el mensaje de "Procesando..." para confirmar que todo terminó
+        # 4. Edita el mensaje de "Procesando..." para confirmar que todo terminó
         editar_mensaje_texto(chat_id, message_id, "✅ ¡Listo! Todos los avisos constantes han sido detenidos.")
     else:
         # Informa al usuario si algo salió mal
