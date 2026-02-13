@@ -52,6 +52,12 @@ def telegram_webhook():
              chat_id = str(cb["from"]["id"])
              enviar_telegram(chat_id, tipo="texto", mensaje="⚠️ Servicio en mantenimiento. Intenta más tarde.")
              return "ok", 200
+    
+    if "message" in data:
+        return manejar_mensaje(data)
+    elif "callback_query" in data:
+        return manejar_callback(data)
+
     return "ok", 200
 
 def manejar_mensaje(data):
