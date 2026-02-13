@@ -352,7 +352,6 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         guardar_estado(chat_id=chat_id, estado="")
         return msg
     elif texto.lower().strip() in ["parar","detener","alto"]:
-        print(f"DEBUG: Detectado comando detener para {chat_id}")
         return detener_avisos(chat_id)
     elif conversaciones[chat_id].get("estado", "") == "":            
         return mostrar_ayuda(nombre_usuario)
@@ -932,7 +931,6 @@ def detener_avisos(chat_id):
     """
     # 1. Envía un mensaje inmediato para que el usuario sepa que recibimos la orden.
     #    Guardamos la respuesta para obtener el message_id y poder editarlo después.
-    print(f"DEBUG: Enviando mensaje de detención a {chat_id}")
     respuesta_inicial = enviar_telegram(chat_id, tipo="texto", mensaje="⌛ Deteniendo avisos, por favor espera...")
     
     if respuesta_inicial and respuesta_inicial.ok:
