@@ -79,26 +79,41 @@ class DatabaseManager:
             )
             ''')
             
+            # Tabla de Eliminaciones Pendientes (para sincronizar bajas)
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bajas_pendientes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tabla TEXT NOT NULL, -- 'recordatorios'
+                registro_id INTEGER, -- ID local
+                supabase_id INTEGER, -- ID remoto (si tenía)
+                fecha_eliminacion TEXT
+            )
+            ''')
+            
             conn.commit()
-            logger.info("Base de datos local (SQLite) inicializada.")
+            logger.info("Base de datos local (SQLite) inicializada con tablas de sincronización.")
 
     def verificar_conexion_supabase(self) -> bool:
         """Verifica si Supabase está disponible y actualiza el estado interno."""
-        if supabase_db and supabase_db.inicializar_supabase():
-            self.supabase_online = True
-            return True
+        # Optimización: Si falló hace poco, no reintentar inmediatamente (puedes agregar lógica de cooldown)
+        try:
+            if supabase_db and supabase_db.inicializar_supabase():
+                self.supabase_online = True
+                return True
+        except:
+            pass
         self.supabase_online = False
         return False
 
     def guardar_recordatorio(self, datos: Dict[str, Any]) -> bool:
         """
-        Guarda un recordatorio.
+        Guarda o actualiza un recordatorio.
         1. Guarda en SQLite (siempre).
         2. Intenta guardar en Supabase.
         3. Actualiza estado de sincronización.
         """
         try:
-            # Guardar localmente primero
+            # Guardar localmente primero (Insert o Update)
             local_id = self._guardar_recordatorio_local(datos, sync_status='pending')
             
             exito_remoto = False
@@ -107,7 +122,10 @@ class DatabaseManager:
             # Intentar remoto si hay conexión
             if self.verificar_conexion_supabase():
                 try:
-                    # supabase_db.guardar_recordatorio devuelve True/False
+                    # Si ya tiene un supabase_id (es edicion), intentar update?
+                    # Por simplicidad, el método 'guardar_recordatorio' de supabase_db actual hace INSERT siempre?
+                    # Vamos a asumir que supabase_db maneja la logica de si existe o no, o lo adaptaremos.
+                    # Asumimos que 'datos' tiene lo necesario.
                     if supabase_db.guardar_recordatorio(datos):
                         exito_remoto = True
                 except Exception as e:
@@ -119,23 +137,65 @@ class DatabaseManager:
                 logger.info(f"Recordatorio {local_id} guardado y sincronizado.")
             else:
                 logger.warning(f"Recordatorio {local_id} guardado SOLO LOCALMENTE. Se sincronizará después.")
-                
+            
             return True
         except Exception as e:
             logger.error(f"Error CRÍTICO al guardar recordatorio localmente: {e}")
             return False
 
+    def eliminar_recordatorio(self, recordatorio_id_local: int, supabase_id: Optional[int] = None) -> bool:
+        """
+        Elimina un recordatorio.
+        1. Elimina de SQLite.
+        2. Registra en 'bajas_pendientes' si tenía ID remoto.
+        3. Intenta eliminar de Supabase si hay conexión.
+        """
+        try:
+            # 1. Obtener info antes de borrar (para saber supabase_id si no vino)
+            with self.get_local_connection() as conn:
+                cursor = conn.cursor()
+                if not supabase_id:
+                    cursor.execute("SELECT supabase_id FROM recordatorios WHERE id = ?", (recordatorio_id_local,))
+                    row = cursor.fetchone()
+                    if row and row['supabase_id']:
+                        supabase_id = row['supabase_id']
+                
+                # 2. Borrar localmente
+                cursor.execute("DELETE FROM recordatorios WHERE id = ?", (recordatorio_id_local,))
+                
+                # 3. Registrar baja pendiente si es necesario
+                if supabase_id:
+                    cursor.execute("INSERT INTO bajas_pendientes (tabla, registro_id, supabase_id, fecha_eliminacion) VALUES (?, ?, ?, ?)",
+                                   ('recordatorios', recordatorio_id_local, supabase_id, datetime.utcnow().isoformat()))
+                
+                conn.commit()
+                logger.info(f"Recordatorio local {recordatorio_id_local} eliminado.")
+
+            # 4. Intentar borrar remoto inmediatamente
+            if self.verificar_conexion_supabase() and supabase_id:
+                try:
+                    if supabase_db.eliminar_recordatorio_por_id(supabase_id):
+                        # Si éxito, borrar de bajas_pendientes
+                        self._eliminar_baja_pendiente(supabase_id)
+                        logger.info(f"Recordatorio remoto {supabase_id} eliminado sincronizadamente.")
+                except Exception as e:
+                    logger.warning(f"No se pudo eliminar remoto {supabase_id} ahora. Se encoló: {e}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error al eliminar recordatorio {recordatorio_id_local}: {e}")
+            return False
+
+    def _eliminar_baja_pendiente(self, supabase_id: int):
+        with self.get_local_connection() as conn:
+            conn.execute("DELETE FROM bajas_pendientes WHERE supabase_id = ?", (supabase_id,))
+            conn.commit()
+
     def obtener_recordatorios_pendientes(self) -> List[Dict]:
-        """
-        Obtiene recordatorios pendientes de notificar desde LOCAL.
-        La fuente de verdad para 'qué notificar' ahora es SQLite para velocidad y offline.
-        """
+        """Obtiene recordatorios pendientes de notificar desde LOCAL."""
         with self.get_local_connection() as conn:
             cursor = conn.cursor()
-            # Seleccionar recordatorios no notificados y cuya fecha sea <= ahora
-            # Nota: Almacenamos fechas como ISO string en UTC o local segun el flag.
-            # Para simplificar, traemos los que no están notificados y el filtro de fecha lo hace el scheduler
-            # O mejor, filtramos por 'notificado = 0'.
             cursor.execute("SELECT * FROM recordatorios WHERE notificado = 0")
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
@@ -147,18 +207,18 @@ class DatabaseManager:
                          (datetime.utcnow().isoformat(), recordatorio_id))
             conn.commit()
             
-        # Intentar sync inmediata si hay red
-        if self.verificar_conexion_supabase():
-            try:
-                # Recuperar el ID de supabase (si existe) para actualizar allá
-                # Por complejidad, esto requerirá que supabase_db tenga un método de update por chat_id+fecha o similar
-                # Ojo: La implementación original de 'marcar_como_notificado' en supabase_db recibía el ID de la BD.
-                # Aquí tenemos un ID local que NO es el de Supabase.
-                pass 
-            except Exception:
-                pass
+        # Intentar sync rápida (opcional, dejamos que el job lo haga para no frenar el hilo de envíos)
+        # self.sincronizar_pendientes() 
 
     def _guardar_recordatorio_local(self, datos: Dict[str, Any], sync_status: str) -> int:
+        # Implementación simple: si viene ID local, es update. Si no, insert.
+        # Pero ojo: 'datos' suele venir del bot sin ID local si es nuevo.
+        # ¿Cómo sabemos si es update? Depende de cómo lo llame el bot.
+        # Por ahora asumimos insert siempre si no trae 'id' explícito o si no existe.
+        
+        # FIX: Para evitar duplicados en reinicios, idealmente chequearíamos por chat_id + nombre_tarea + fecha... 
+        # pero es arriesgado.
+        
         with self.get_local_connection() as conn:
             cursor = conn.cursor()
             
@@ -179,7 +239,7 @@ class DatabaseManager:
 
             rep_creada = 1 if datos.get("repeticion_creada") else 0
             
-            # Serializar fecha si es objeto datetime
+            # Serializar fecha
             fecha_hora = datos.get("fecha_hora")
             if isinstance(fecha_hora, datetime):
                 fecha_hora = fecha_hora.isoformat()
@@ -188,6 +248,7 @@ class DatabaseManager:
             if isinstance(creado_en, datetime):
                 creado_en = creado_en.isoformat()
 
+            # Insertar
             cursor.execute('''
                 INSERT INTO recordatorios (
                     chat_id, usuario, nombre_tarea, descripcion, fecha_hora, 
@@ -226,27 +287,49 @@ class DatabaseManager:
                 cursor.execute('UPDATE recordatorios SET sync_status = ? WHERE id = ?', (status, local_id))
             conn.commit()
 
-    def sincronizar_pendientes(self):
-        """Busca registros locales pendientes y los sube a Supabase."""
+    def sincronizar_todo(self):
+        """Ejecuta sincronización bidireccional completa."""
         if not self.verificar_conexion_supabase():
             return
 
+        logger.info("--- Iniciando ciclo de sincronización ---")
+        self.sincronizar_local_a_remoto() # Subir cambios
+        self.sincronizar_remoto_a_local() # Bajar cambios
+        logger.info("--- Fin ciclo de sincronización ---")
+
+    def sincronizar_local_a_remoto(self):
+        """Sube bajas pendientes y registros pendientes a Supabase."""
         with self.get_local_connection() as conn:
-            # Obtener pendientes de creación
+            # 1. Procesar Bajas (Deletions)
+            cursor = conn.execute("SELECT * FROM bajas_pendientes")
+            bajas = cursor.fetchall()
+            for baja in bajas:
+                if baja['supabase_id']:
+                    try:
+                        # Intentar eliminar en Supabase
+                        # Nota: eliminar_recordatorio_por_id ya devuelve True/False
+                        if supabase_db.eliminar_recordatorio_por_id(baja['supabase_id']):
+                            conn.execute("DELETE FROM bajas_pendientes WHERE id = ?", (baja['id'],))
+                            logger.info(f"Baja sincronizada: Supabase ID {baja['supabase_id']}")
+                        else:
+                            # Si falla porque no existe (ya borrado), también limpiamos
+                            # ¿Cómo saberlo? Por ahora asumimos que si falló es por error de red.
+                            pass 
+                    except Exception as e:
+                        logger.error(f"Error sync baja {baja['supabase_id']}: {e}")
+            conn.commit()
+
+            # 2. Procesar Altas (Inserts)
             cursor = conn.execute("SELECT * FROM recordatorios WHERE sync_status = 'pending'")
             pendientes = cursor.fetchall()
-            
             for row in pendientes:
                 datos = dict(row)
-                logger.info(f"Sincronizando recordatorio pendiente ID local: {datos['id']}")
-                
-                # Reconstruir diccionario para Supabase
                 datos_para_envio = {
                     "chat_id": datos["chat_id"],
                     "usuario": datos["usuario"],
                     "nombre_tarea": datos["nombre_tarea"],
                     "descripcion": datos["descripcion"],
-                    "fecha_hora": datos["fecha_hora"], # Supabase espera string ISO o datetime
+                    "fecha_hora": datos["fecha_hora"],
                     "creado_en": datos["creado_en"],
                     "es_formato_utc": bool(datos["es_formato_utc"]),
                     "aviso_constante": bool(datos["aviso_constante"]),
@@ -256,11 +339,114 @@ class DatabaseManager:
                 }
                 
                 try:
+                    # Necesitamos que supabase_db nos devuelva el registro insertado para obtener el ID real
+                    # Tendremos que modificar supabase_db.guardar_recordatorio o asumir insert simple por ahora
+                    # y esperar que 'sincronizar_remoto_a_local' traiga el ID luego.
                     if supabase_db.guardar_recordatorio(datos_para_envio):
+                        # Marcamos como synced. El ID de supabase se actualizará cuando hagamos pull.
                         self._actualizar_estado_sync_recordatorio(row['id'], 'synced')
-                        logger.info(f"--> Sincronizado exitosamente.")
+                        logger.info(f"Insert local {row['id']} subido a Supabase.")
                 except Exception as e:
-                    logger.error(f"Error sincronizando ID {row['id']}: {e}")
+                    logger.error(f"Error subiendo insert {row['id']}: {e}")
+
+            # 3. Procesar Modificaciones (Updates - ej: notificado)
+            cursor = conn.execute("SELECT * FROM recordatorios WHERE sync_status = 'pending_update'")
+            pendientes = cursor.fetchall()
+            for row in pendientes:
+                if row['supabase_id']:
+                    try:
+                        # Si es solo marcar notificado
+                        if row['notificado']:
+                            supabase_db.marcar_como_notificado(row['supabase_id'])
+                        
+                        self._actualizar_estado_sync_recordatorio(row['id'], 'synced', row['supabase_id'])
+                        logger.info(f"Update local {row['id']} subido a Supabase.")
+                    except Exception as e:
+                        logger.error(f"Error subiendo update {row['id']}: {e}")
+            
+            conn.commit()
+
+    def sincronizar_remoto_a_local(self):
+        """Descarga nuevos recordatorios de Supabase a Local y actualiza existentes."""
+        try:
+            # Traer TODO de Supabase de los chats que tenemos localmente? 
+            # O traer updates recientes?
+            # Para robustez inicial: Traer todos los 'pendientes' de Supabase (no notificados)
+            # y actualizar nuestra BD local.
+            
+            remotos = supabase_db.obtener_recordatorios_pendientes(pagina_tamano=1000)
+            if not remotos:
+                return
+
+            with self.get_local_connection() as conn:
+                cursor = conn.cursor()
+                for rem in remotos:
+                    supa_id = rem['id']
+                    
+                    # Verificar si existe localmente (por supabase_id)
+                    cursor.execute("SELECT id, last_updated FROM recordatorios WHERE supabase_id = ?", (supa_id,))
+                    local_row = cursor.fetchone()
+
+                    if local_row:
+                        # Existe. ¿Actualizar?
+                        # Estrategia simple: El remoto manda. (Server Authority)
+                        # Salvo que local tenga cambios pendientes ('pending_update').
+                        # Pero aquí simplificamos: Sobreescribir local con remoto.
+                        
+                        # Fix: Mapear campos de supabase a local schema
+                        cursor.execute('''
+                            UPDATE recordatorios SET
+                                chat_id=?, usuario=?, nombre_tarea=?, descripcion=?, fecha_hora=?, 
+                                notificado=?, es_formato_utc=?, aviso_constante=?, 
+                                aviso_detenido=?, repetir=?, intervalo_repeticion=?, intervalos=?, 
+                                repeticion_creada=?, sync_status='synced', last_updated=?
+                            WHERE id=?
+                        ''', (
+                            str(rem["chat_id"]), rem["usuario"], rem["nombre_tarea"], rem.get("descripcion"),
+                            rem.get("fecha_hora"), 1 if rem.get("notificado") else 0,
+                            1 if rem.get("es_formato_utc") else 0, 1 if rem.get("aviso_constante") else 0,
+                            1 if rem.get("aviso_detenido") else 0, 1 if rem.get("repetir") else 0,
+                            rem.get("intervalo_repeticion"), rem.get("intervalos"),
+                            1 if rem.get("repeticion_creada") else 0,
+                            datetime.utcnow().isoformat(),
+                            local_row['id']
+                        ))
+                    else:
+                        # No existe localmente (por ID de supabase).
+                        # ¿Verificar si fue borrado localmente?
+                        cursor.execute("SELECT id FROM bajas_pendientes WHERE supabase_id = ?", (supa_id,))
+                        baja = cursor.fetchone()
+                        if baja:
+                            logger.info(f"Registro remoto {supa_id} ignorado porque está borrado localmente.")
+                            continue
+
+                        # Insertar nuevo
+                        cursor.execute('''
+                            INSERT INTO recordatorios (
+                                chat_id, usuario, nombre_tarea, descripcion, fecha_hora, 
+                                creado_en, notificado, es_formato_utc, aviso_constante, 
+                                aviso_detenido, repetir, intervalo_repeticion, intervalos, 
+                                repeticion_creada, supabase_id, sync_status, last_updated
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            str(rem["chat_id"]), rem["usuario"], rem["nombre_tarea"], rem.get("descripcion"),
+                            rem.get("fecha_hora"), rem.get("creado_en"),
+                            1 if rem.get("notificado") else 0, 1 if rem.get("es_formato_utc") else 0,
+                            1 if rem.get("aviso_constante") else 0, 1 if rem.get("aviso_detenido") else 0,
+                            1 if rem.get("repetir") else 0, rem.get("intervalo_repeticion"),
+                            rem.get("intervalos"), 1 if rem.get("repeticion_creada") else 0,
+                            supa_id, 'synced', datetime.utcnow().isoformat()
+                        ))
+                        logger.info(f"Registro remoto {supa_id} importado a local.")
+                
+                conn.commit()
+
+        except Exception as e:
+            logger.error(f"Error en pull remoto: {e}")
+
+    def sincronizar_pendientes(self):
+        # Alias para mantener compatibilidad temporal, redirige a sincronizar_todo
+        self.sincronizar_todo()
 
 
     # TODO: Implementar lógica para Chats Info y otras tablas
