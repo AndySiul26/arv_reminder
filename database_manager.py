@@ -255,8 +255,14 @@ class DatabaseManager:
         """Detiene los avisos constantes para un chat en local y encola sync."""
         try:
             with self.get_local_connection() as conn:
+                cursor = conn.cursor()
+                # DEBUG: Ver que hay antes
+                cursor.execute('SELECT id, aviso_constante, aviso_detenido FROM recordatorios WHERE chat_id = ?', (str(chat_id),))
+                candidatos = cursor.fetchall()
+                logger.info(f"DEBUG: Candidatos para detener en chat {chat_id}: {[dict(c) for c in candidatos]}")
+
                 # Marcar como detenidos todos los avisos constantes ACTIVOS de este chat
-                cursor = conn.execute('''
+                cursor.execute('''
                     UPDATE recordatorios 
                     SET aviso_detenido = 1, sync_status = 'pending_update', last_updated = ?
                     WHERE chat_id = ? AND aviso_constante = 1 AND aviso_detenido = 0
