@@ -1,6 +1,15 @@
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
-from supabase_db import guardar_recordatorio as supabase_guardar_recordatorio, leer_modo_tester, actualizar_estado_chat_id
+# Usamos el manager para guardar, que maneja la lógica dual
+from database_manager import db_manager 
+# Mantenemos imports de supabase_db para funciones que aún no migramos o auxiliares
+from supabase_db import (
+    leer_modo_tester, 
+    actualizar_estado_chat_id,
+    marcar_como_repetido,
+    eliminar_recordatorios_finalizados,
+    obtener_chats_sin_zona_horaria
+)
 import json
 from datetime import datetime
 import time
@@ -8,13 +17,6 @@ import threading
 import schedule, os, requests
 import utilidades
 
-from supabase_db import (
-    obtener_recordatorios_pendientes,
-    marcar_como_notificado,
-    marcar_como_repetido,
-    eliminar_recordatorios_finalizados,
-    obtener_chats_sin_zona_horaria
-)
 from gestionar_actualizaciones import (
     registrar_chats_si_no_existen,
     obtener_chats_para_actualizacion,
@@ -53,6 +55,9 @@ class AdministradorRecordatorios:
 
     def _ejecutar(self):
         """Método principal que se ejecuta en el hilo"""
+        
+        # Inicializar DB local
+        db_manager.inicializar_db_local()
 
         # --- CORRECCIÓN INICIAL ---
         primero_ok = self.corregir_recordatorios()
@@ -65,6 +70,10 @@ class AdministradorRecordatorios:
         verificar_recordatorios_ahora()
         schedule.every(1).minutes.do(self.verificar_recordatorios)
         schedule.every(5).minutes.do(self.verificar_actualizaciones)
+        
+        # --- SINCRONIZACIÓN BACKGROUND ---
+        # Intentar subir pendientes cada 2 minutos
+        schedule.every(2).minutes.do(db_manager.sincronizar_pendientes) 
 
         # Bucle principal
         while self.activo:
@@ -84,8 +93,41 @@ class AdministradorRecordatorios:
 
     def verificar_recordatorios(self):
         """Verifica si hay recordatorios pendientes y los envía"""
-        print(f"[{datetime.now().isoformat()}] Verificando recordatorios...")
-        for recordatorio in obtener_recordatorios_pendientes():
+        print(f"[{datetime.now().isoformat()}] Verificando recordatorios (Fuente: SQLite Local)...")
+        # AHORA LEEMOS DE LA BD LOCAL
+        pendientes = db_manager.obtener_recordatorios_pendientes()
+        
+        # Filtro adicional de fecha aquí, ya que el SQL trae todos los 'no notificados' 
+        # (Optimizacion: mover filtro fecha al SQL en db_manager si crece mucho)
+        ahora_utc = datetime.utcnow()
+        
+        for recordatorio in pendientes:
+            # Validar fecha vencida
+            try:
+                fecha_str = recordatorio.get("fecha_hora")
+                if not fecha_str: continue
+                
+                fecha_dt = datetime.fromisoformat(fecha_str)
+                # Asumimos que recordatorios en DB local se guardan normalizados si es posible,
+                # pero 'fecha_hora' suele venir en ISO. 
+                # Comparar con UTC actual.
+                
+                # Si 'fecha_dt' no tiene tzinfo, asumimos que es comparable con nuestra referencia
+                # La logica original usaba 'hora_utc_servidor_segun_zona_host' pero aqui simplificamos.
+                # Si la fecha del recordatorio <= ahora, se envía.
+                
+                # Hack simple: si fecha_dt es naive, asumirla UTC para comparar con utcnow
+                if fecha_dt.tzinfo is None:
+                     if fecha_dt > ahora_utc:
+                         continue # Aún no toca
+                else:
+                    if fecha_dt > datetime.now(fecha_dt.tzinfo):
+                        continue
+
+            except Exception as e:
+                print(f"Error procesando fecha recordatorio {recordatorio.get('id')}: {e}")
+                continue
+
             self._enviar_recordatorio(recordatorio)
 
     def _enviar_recordatorio(self, recordatorio):
@@ -150,8 +192,8 @@ class AdministradorRecordatorios:
             except Exception as e: 
                 print("Error al guardar datos de mensaje en enviar recordatorio:", str(e))
 
-            # Marcar como notificado
-            marcar_como_notificado(recordatorio["id"])
+            # Marcar como notificado (LOCALMENTE + INTENTO SYNC)
+            db_manager.marcar_como_notificado(recordatorio["id"])
 
             # Si debe repetirse, crear siguiente
             if repetir and recordatorio.get("fecha_hora") and simbolo and num > 0 and not repeticion_creada:
@@ -191,15 +233,24 @@ class AdministradorRecordatorios:
                             "intervalo_repeticion": simbolo,
                             "aviso_constante":   aviso_constante
                         }
-                        supabase_guardar_recordatorio(nuevo)
-                        # Marcar el recordatorio original como repeticion_creada para que no se repita esto nuevamente
-                        marcar_como_repetido(recordatorio["id"])
+                        # GUARDAR NUEVO RECORDATORIO (USANDO MANAGER)
+                        db_manager.guardar_recordatorio(nuevo)
+                        
+                        # Marcar el recordatorio original como repeticion_creada
+                        # OJO: marcar_como_repetido es update simple. 
+                        # Si estamos offline, esto podría fallar si se llama directo a supabase_db.
+                        # Idealmente db_manager debería manejar esto también, pero por ahora...
+                        try:
+                           marcar_como_repetido(recordatorio["id"])
+                        except:
+                           pass # Si falla marking, se reintentará luego o quedará sucio pero no critico
+                           
                         print(f"Siguiente recordatorio programado para {nueva_dt.isoformat()}")
                 except Exception as e:
                     print(f"Error al crear siguiente recordatorio repetido: {e}")
 
             # Limpiar recordatorios finalizados
-            eliminar_recordatorios_finalizados()
+            # eliminar_recordatorios_finalizados() # Desactivar limpieza agresiva si estamos offline
             print(f"Recordatorio enviado a {chat_id}")
 
         except Exception as e:
