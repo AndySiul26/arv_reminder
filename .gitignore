@@ -58,3 +58,9 @@ test.py
 # gestionar_actualizaciones.py
 Actualizaciones.txt
 
+
+# Local Backups and DBs
+backups/
+*.db
+*.sqlite
+docker-compose-local-postgres.yml

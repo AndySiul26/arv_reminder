@@ -16,4 +16,5 @@ services:
       # Timezone Configuration (Important for correct reminder scheduling)
       - TZ=${TZ:-UTC}
       - ZONA_SERVIDOR=${ZONA_SERVIDOR:-UTC}
-    # Volumes removed to prevent permission issues
+    volumes:
+      - ./local_backup.db:/app/local_backup.db

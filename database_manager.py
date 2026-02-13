@@ -90,8 +90,51 @@ class DatabaseManager:
             )
             ''')
             
+            # --- TABLAS ADICIONALES (Espejos de Supabase) ---
+            
+            # actualizaciones_info
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS actualizaciones_info (
+                id INTEGER PRIMARY KEY, -- ID de Supabase
+                titulo TEXT,
+                descripcion TEXT,
+                fecha_hora TEXT
+            )
+            ''')
+
+            # chats_avisados_actualizaciones
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chats_avisados_actualizaciones (
+                id INTEGER PRIMARY KEY, -- ID de Supabase
+                chat_id TEXT,
+                id_ultima_actualizacion INTEGER
+            )
+            ''')
+            
+            # chats_id_estados (Inferido)
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chats_id_estados (
+                id INTEGER PRIMARY KEY,
+                chat_id TEXT,
+                estado TEXT,
+                step TEXT,
+                data TEXT, -- JSON string
+                updated_at TEXT
+            )
+            ''')
+
+            # modo_tester
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS modo_tester (
+                id INTEGER PRIMARY KEY,
+                activado INTEGER DEFAULT 0,
+                modo_tester INTEGER DEFAULT 0, -- Posible nombre real de la columna
+                descripcion TEXT
+            )
+            ''')
+            
             conn.commit()
-            logger.info("Base de datos local (SQLite) inicializada con tablas de sincronización.")
+            logger.info("Base de datos local (SQLite) inicializada con TODAS las tablas.")
 
     def verificar_conexion_supabase(self) -> bool:
         """Verifica si Supabase está disponible y actualiza el estado interno."""

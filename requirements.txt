@@ -7,3 +7,4 @@ python-telegram-bot
 gunicorn
 tzdata
 dateparser
+python-dateutil
