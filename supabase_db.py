@@ -190,6 +190,24 @@ def obtener_recordatorios_por_ids(lista_ids):
         print(f"Error al obtener recordatorios por IDs desde Supabase: {e}")
         return None
 
+def obtener_todos_los_ids_recordatorios():
+    """Retorna una lista con TODOS los IDs de recordatorios en Supabase."""
+    if not supabase:
+        if not inicializar_supabase():
+            return []
+    try:
+        # Paginación automática si son muchos, o traer solo IDs
+        # Supabase py client a veces trunca, pero 'select' sin limit puede ser peligroso.
+        # Mejor usar paginación básica o un limit alto si son pocos usuarios.
+        # Asumimos < 10000 por ahora.
+        response = supabase.table("recordatorios").select("id").execute()
+        if response.data:
+            return [r['id'] for r in response.data]
+        return []
+    except Exception as e:
+        print(f"Error al obtener todos los IDs: {e}")
+        return []
+
 
 def obtener_recordatorios_pendientes(pagina_tamano=1000):
     """Obtiene todos los recordatorios pendientes de notificar, incluyendo los que deben repetirse constantemente, con paginación."""

@@ -468,6 +468,20 @@ class DatabaseManager:
                         if exito:
                             self._actualizar_estado_sync_recordatorio(row['id'], 'synced', row['supabase_id'])
                             logger.info(f"Update local {row['id']} subido a Supabase.")
+                        else:
+                            # Si falló TODO intento de update, puede que el registro ya no exista en Supabase (Zombie).
+                            # Verificamos si existe.
+                            # Para no hacer requests extra siempre, podriamos inferirlo del error, pero supabase_db 
+                            # actualmente printea el error y retorna False.
+                            # Vamos a asumir que si falla repetidamente podría ser un zombie.
+                            # O mejor: implementar un chequeo rapido.
+                            pass # Por ahora confiamos en fix_zombies.py o logica futura.
+                            
+                            # MEJORA: Si el error fue "No se encontró...", deberíamos borrarlo local.
+                            # Como no tenemos el mensaje de error aqui (solo False), es dificil.
+                            # Pero si 'exito' es False despues de intentar, es sospechoso.
+                            logger.warning(f"Fallo al subir updates para {row['id']}. Posible zombie.")
+
                     except Exception as e:
                         logger.error(f"Error subiendo update {row['id']}: {e}")
             

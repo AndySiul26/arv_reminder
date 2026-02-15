@@ -5,7 +5,7 @@ echo "🚀 Starting ARV Reminder Bot (Standalone SSL Mode)..."
 
 # 1. Initialize Supabase Database
 echo "📦 initializing database..."
-python setup_supabase.py
+python3 setup_supabase.py
 
 # 2. SSL Certificate Generation (Self-Signed)
 # Telegram REQUIRES the certificate to be sent if we use self-signed.
