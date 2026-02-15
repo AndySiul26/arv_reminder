@@ -230,7 +230,9 @@ class AdministradorRecordatorios:
                             "repetir":           True,
                             "intervalos":        num,
                             "intervalo_repeticion": simbolo,
-                            "aviso_constante":   aviso_constante
+                            "aviso_constante":   aviso_constante,
+                            "aviso_detenido":    False, # Resetear estado
+                            "notificado":        False  # Resetear estado
                         }
                         # GUARDAR NUEVO RECORDATORIO (USANDO MANAGER)
                         db_manager.guardar_recordatorio(nuevo)

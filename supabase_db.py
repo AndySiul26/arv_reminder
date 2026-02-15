@@ -101,6 +101,7 @@ def guardar_recordatorio(datos):
             "es_formato_utc": datos.get("es_formato_utc", False),
             "notificado": False,
             "aviso_constante": datos.get("aviso_constante", False),
+            "aviso_detenido": datos.get("aviso_detenido", False), # Fix: Explicitamente enviar estado
             "repetir": datos.get("repetir", False) in [True, "si", "yes", "y"],
             "intervalo_repeticion": datos.get("intervalo_repeticion", ""),
             "intervalos": int(datos.get("intervalos", 0)),
