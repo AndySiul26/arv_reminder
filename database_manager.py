@@ -261,7 +261,7 @@ class DatabaseManager:
                 cursor = conn.execute('''
                     UPDATE recordatorios 
                     SET aviso_detenido = 1, sync_status = 'pending_update', last_updated = ?
-                    WHERE chat_id = ? AND aviso_constante = 1 AND aviso_detenido = 0
+                    WHERE chat_id = ? AND aviso_constante = 1 AND aviso_detenido = 0 AND notificado = 1
                 ''', (datetime.utcnow().isoformat(), str(chat_id)))
                 
                 rows = cursor.rowcount

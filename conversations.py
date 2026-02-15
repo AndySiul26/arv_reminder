@@ -381,6 +381,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
         # Preguntamos qué campo
         botones = [
+            {"texto": "📋 Ver Detalles",  "data": "campo_ver_detalles"},
             {"texto": "Nombre de Tarea",         "data": "campo_nombre_tarea"},
             {"texto": "Descripción",   "data": "campo_descripcion"},
             {"texto": "Fecha/Hora",    "data": "campo_fecha_hora"},
@@ -402,6 +403,87 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     if estado_actual == ESTADO_EDITAR_CAMPO:
         datos = conversaciones[chat_id]["datos"]
         record_id = datos["record_id"]
+        record_data = datos.get("record_data", {})
+
+        if texto == "campo_ver_detalles":
+            # Mostrar información completa del recordatorio
+            zona = conversaciones[chat_id]["datos"].get("zona_horaria", "")
+            nombre = record_data.get("nombre_tarea", "N/A")
+            desc = record_data.get("descripcion", "N/A") or "Sin descripción"
+            fecha_raw = record_data.get("fecha_hora", "")
+            es_utc = record_data.get("es_formato_utc", False)
+            repetir = record_data.get("repetir", False)
+            intervalo = record_data.get("intervalo_repeticion", "")
+            intervalos = record_data.get("intervalos", 0)
+            constante = record_data.get("aviso_constante", False)
+            detenido = record_data.get("aviso_detenido", False)
+            notificado_val = record_data.get("notificado", False)
+            creado_en = record_data.get("creado_en", "")
+
+            # Formatear fecha a local si es UTC
+            fecha_str = fecha_raw
+            if fecha_raw and es_utc and zona:
+                try:
+                    dt_utc = datetime.fromisoformat(fecha_raw)
+                    dt_local = utilidades.convertir_fecha_utc_a_local(fecha_utc=dt_utc, zona_horaria=zona)
+                    fecha_str = dt_local.strftime("%d/%m/%Y %I:%M %p")
+                except:
+                    fecha_str = fecha_raw
+            elif fecha_raw:
+                try:
+                    fecha_str = datetime.fromisoformat(fecha_raw).strftime("%d/%m/%Y %I:%M %p")
+                except:
+                    fecha_str = fecha_raw
+
+            # Construir mensaje
+            sim_map = {"s": "segundos", "x": "minutos", "h": "horas", "d": "días", "w": "semanas", "m": "meses", "a": "años"}
+            rep_texto = "No"
+            if repetir:
+                unidad = sim_map.get(intervalo, intervalo)
+                rep_texto = f"Sí, cada {intervalos} {unidad}"
+
+            msg = (f"📋 *Detalles del Recordatorio*\n\n"
+                   f"📝 *Tarea:* {nombre}\n"
+                   f"📄 *Descripción:* {desc}\n"
+                   f"📅 *Fecha/Hora:* {fecha_str}\n"
+                   f"🔁 *Repetir:* {rep_texto}\n"
+                   f"📢 *Aviso Constante:* {'Sí' if constante else 'No'}\n"
+                   f"🛑 *Detenido:* {'Sí' if detenido else 'No'}\n"
+                   f"✅ *Notificado:* {'Sí' if notificado_val else 'No'}\n"
+                   f"🆔 *ID:* `{record_id}`")
+            if creado_en:
+                try:
+                    creado_str = datetime.fromisoformat(creado_en).strftime("%d/%m/%Y %I:%M %p")
+                except:
+                    creado_str = creado_en
+                msg += f"\n🕐 *Creado:* {creado_str}"
+
+            # Mostrar detalles y volver al menú de edición
+            if conversaciones[chat_id].get("id_callback"):
+                editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"], nuevo_texto=msg, formato="Markdown")
+            else:
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=msg, formato="Markdown")
+
+            # Volver a mostrar el menú de edición
+            botones = [
+                {"texto": "📋 Ver Detalles",  "data": "campo_ver_detalles"},
+                {"texto": "Nombre de Tarea",         "data": "campo_nombre_tarea"},
+                {"texto": "Descripción",   "data": "campo_descripcion"},
+                {"texto": "Fecha/Hora",    "data": "campo_fecha_hora"},
+                {"texto": "Repetir",       "data": "campo_repetir"},
+                {"texto": "Intervalo",     "data": "campo_intervalo"},
+                {"texto": "Aviso Const.",  "data": "campo_aviso_constante"},
+                {"texto": "Eliminar",  "data": "campo_eliminar"},
+                {"texto": "Cancelar",  "data": "cancelar"},
+            ]
+            enviar_telegram(
+                chat_id, tipo="botones",
+                mensaje="¿Qué campo deseas editar?",
+                botones=botones, func_guardado_data=guardar_info_mensaje_enviado
+            )
+            conversaciones[chat_id]["wait_callback"] = True
+            return ""
+
         if texto == "campo_eliminar":
             supabase_db.eliminar_recordatorio_por_id(recordatorio_id=record_id)
             if conversaciones[chat_id]["id_callback"]:
