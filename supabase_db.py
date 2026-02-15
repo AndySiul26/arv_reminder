@@ -210,6 +210,28 @@ def obtener_todos_los_ids_recordatorios():
         return []
 
 
+def guardar_reporte(datos):
+    """Guarda un reporte de usuario en Supabase."""
+    if not supabase:
+        if not inicializar_supabase():
+            return None
+    try:
+        registro = {
+            "chat_id": str(datos["chat_id"]),
+            "usuario": datos.get("usuario", ""),
+            "descripcion": datos["descripcion"],
+            "fecha_hora": datos.get("fecha_hora"),
+            "estado": "pendiente",
+        }
+        response = supabase.table("reportes").insert(registro).execute()
+        if response.data:
+            return response.data[0].get("id")
+        return None
+    except Exception as e:
+        print(f"Error al guardar reporte en Supabase: {e}")
+        return None
+
+
 def obtener_recordatorios_pendientes(pagina_tamano=1000):
     """Obtiene todos los recordatorios pendientes de notificar, incluyendo los que deben repetirse constantemente, con paginación."""
     if not supabase:

@@ -219,6 +219,24 @@ def crear_tabla_chats_id_estados(supabase: Client):
     except Exception as e:
         print(f"❌ Error al crear la tabla 'chats_id_estados': {e}")
 
+def crear_tabla_reportes(supabase: Client):
+    """Crea la tabla de reportes de usuarios en Supabase."""
+    try:
+        sql = """
+        CREATE TABLE IF NOT EXISTS reportes (
+            id SERIAL PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            descripcion TEXT NOT NULL,
+            fecha_hora TIMESTAMP DEFAULT NOW(),
+            estado TEXT DEFAULT 'pendiente'
+        );
+        """
+        response = supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ Tabla 'reportes' creada correctamente.")
+    except Exception as e:
+        print(f"❌ Error al crear la tabla 'reportes': {e}")
+
 
 if __name__ == "__main__":
     print("Configurando base de datos en Supabase...")
@@ -235,6 +253,7 @@ if __name__ == "__main__":
             crear_tabla_chats_info(cliente)
             crear_tabla_modo_tester(cliente)
             crear_tabla_chats_id_estados(cliente)
+            crear_tabla_reportes(cliente)
             print("✅ Configuración completada con éxito")
         else:
              print("⚠️ Salto de configuración por cliente nulo.")

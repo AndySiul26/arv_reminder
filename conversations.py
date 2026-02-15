@@ -30,6 +30,7 @@ ESTADO_REPETIR = "repetir"
 ESTADO_INTERVALO_REPETICION = "intervalos"
 ESTADO_AVISO_CONSTANTE = "aviso_constante"
 ESTADO_CONFIRMAR = "confirmar"
+ESTADO_REPORTAR = "reportar"
 
 CAMPO_GUARDADO_PETICION_ZONA_HORARIA = 1
 CAMPO_GUARDADO_ESTADO = 2
@@ -432,6 +433,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=True)
     if texto.lower() in ["/recordatorios", "recordatorios"]:
         return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=False)
+    if texto.lower() in ["/reportar", "reportar"]:
+        return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
         if "editar" in conversaciones[chat_id].get("estado",""):
             msg = "La edición del recordatorio ha sido cancelada"
@@ -457,6 +460,11 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     
     # Procesar según el estado actual de la conversación
     estado_actual = conversaciones[chat_id]["estado"]
+
+    # — FLUJO DE REPORTE —
+    if estado_actual == ESTADO_REPORTAR:
+        return procesar_reporte(chat_id, texto, nombre_usuario)
+
 
      # — FLUJO INICIAL DE EDICIÓN: Filtro pendientes/todos —
     if estado_actual == ESTADO_EDITAR_INICIAL:
@@ -1053,6 +1061,66 @@ def generar_mensaje_confirmacion(chat_id):
         )
     return ""
 
+def iniciar_reporte(chat_id, nombre_usuario):
+    """Inicia el flujo de reportar un problema."""
+    conversaciones[chat_id].update({
+        "estado": ESTADO_REPORTAR, "wait_callback": False})
+    conversaciones[chat_id]["datos"].update({
+        "usuario": nombre_usuario,
+    })
+    enviar_telegram(chat_id, tipo="texto",
+        mensaje="📝 *Reportar un problema*\n\n"
+                "Describe el problema o incidencia que estás experimentando. "
+                "Tu reporte será enviado al administrador para su revisión.\n\n"
+                "Escribe tu reporte a continuación o envía /cancelar para salir.",
+        formato="Markdown", func_guardado_data=guardar_info_mensaje_enviado)
+    return ""
+
+def procesar_reporte(chat_id, texto, nombre_usuario):
+    """Procesa y guarda el reporte del usuario."""
+    from datetime import datetime as dt_class
+    datos_reporte = {
+        "chat_id": str(chat_id),
+        "usuario": nombre_usuario,
+        "descripcion": texto,
+        "fecha_hora": utilidades.hora_utc_servidor_segun_zona_host().isoformat(),
+    }
+    # Guardar en Supabase
+    reporte_id = supabase_db.guardar_reporte(datos_reporte)
+
+    # Guardar local
+    try:
+        with db_manager.get_local_connection() as conn:
+            conn.execute(
+                "INSERT INTO reportes (chat_id, usuario, descripcion, fecha_hora, estado, supabase_id, sync_status, last_updated) "
+                "VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?)",
+                (str(chat_id), nombre_usuario, texto, datos_reporte["fecha_hora"],
+                 reporte_id, 'synced' if reporte_id else 'pending',
+                 utilidades.hora_utc_servidor_segun_zona_host().isoformat()))
+            conn.commit()
+    except Exception as e:
+        print(f"[WARN] Error guardando reporte local: {e}")
+
+    # Notificar al admin
+    TEST_USER_ID = os.environ.get("TELEGRAM_TEST_USER_ID", "")
+    if TEST_USER_ID:
+        admin_msg = (f"🚨 *Nuevo reporte de usuario*\n\n"
+                     f"👤 *Usuario:* {nombre_usuario}\n"
+                     f"🆔 *Chat ID:* `{chat_id}`\n"
+                     f"📝 *Reporte:* {texto}\n"
+                     f"🕐 *Fecha:* {dt_class.now().strftime('%d/%m/%Y %H:%M')}")
+        enviar_telegram(TEST_USER_ID, tipo="texto", mensaje=admin_msg, formato="Markdown")
+
+    # Confirmar al usuario
+    enviar_telegram(chat_id, tipo="texto",
+        mensaje="✅ *¡Reporte enviado!*\n\n"
+                "Tu reporte ha sido registrado y será revisado por el administrador. "
+                "Gracias por ayudarnos a mejorar el servicio.",
+        formato="Markdown", func_guardado_data=guardar_info_mensaje_enviado)
+    
+    del conversaciones[chat_id]
+    return ""
+
 def mostrar_ayuda(nombre_usuario):
     """Muestra un mensaje de ayuda al usuario"""
     mensaje = f"¡Hola {nombre_usuario}! Soy ARV Reminder y te puedo ayudar a recordar tus tareas.\n\n"
@@ -1061,6 +1129,7 @@ def mostrar_ayuda(nombre_usuario):
     mensaje += "• /editar - Editar un recordatorio\n"
     mensaje += "• /pendientes - Ver tus recordatorios pendientes\n"
     mensaje += "• /recordatorios - Ver todos tus recordatorios registrados\n"
+    mensaje += "• /reportar - Reportar un problema o incidencia\n"
     mensaje += "• /ayuda - Mostrar este mensaje de ayuda\n\n"
     mensaje += "Para comenzar, escribe /recordatorio"
     

@@ -132,6 +132,21 @@ class DatabaseManager:
                 descripcion TEXT
             )
             ''')
+
+            # Tabla Reportes de usuarios
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reportes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                usuario TEXT,
+                descripcion TEXT NOT NULL,
+                fecha_hora TEXT,
+                estado TEXT DEFAULT 'pendiente',
+                supabase_id INTEGER,
+                sync_status TEXT DEFAULT 'pending',
+                last_updated TEXT
+            )
+            ''')
             
             conn.commit()
             logger.info("Base de datos local (SQLite) inicializada con TODAS las tablas.")
