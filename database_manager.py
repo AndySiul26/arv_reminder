@@ -169,8 +169,10 @@ class DatabaseManager:
                     # Por simplicidad, el método 'guardar_recordatorio' de supabase_db actual hace INSERT siempre?
                     # Vamos a asumir que supabase_db maneja la logica de si existe o no, o lo adaptaremos.
                     # Asumimos que 'datos' tiene lo necesario.
-                    if supabase_db.guardar_recordatorio(datos):
+                    remoto_id = supabase_db.guardar_recordatorio(datos)
+                    if remoto_id:
                         exito_remoto = True
+                        supabase_id = remoto_id
                 except Exception as e:
                     logger.error(f"Fallo al guardar en Supabase: {e}")
             
@@ -423,10 +425,11 @@ class DatabaseManager:
                     # Necesitamos que supabase_db nos devuelva el registro insertado para obtener el ID real
                     # Tendremos que modificar supabase_db.guardar_recordatorio o asumir insert simple por ahora
                     # y esperar que 'sincronizar_remoto_a_local' traiga el ID luego.
-                    if supabase_db.guardar_recordatorio(datos_para_envio):
+                    remoto_id = supabase_db.guardar_recordatorio(datos_para_envio)
+                    if remoto_id:
                         # Marcamos como synced. El ID de supabase se actualizará cuando hagamos pull.
-                        self._actualizar_estado_sync_recordatorio(row['id'], 'synced')
-                        logger.info(f"Insert local {row['id']} subido a Supabase.")
+                        self._actualizar_estado_sync_recordatorio(row['id'], 'synced', remoto_id)
+                        logger.info(f"Insert local {row['id']} subido a Supabase. ID Remoto: {remoto_id}")
                 except Exception as e:
                     logger.error(f"Error subiendo insert {row['id']}: {e}")
 

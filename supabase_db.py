@@ -111,15 +111,15 @@ def guardar_recordatorio(datos):
         response = supabase.table("recordatorios").insert(recordatorio).execute()
 
         if response.data:
-            return True
+            return response.data[0]['id']
         else:
             print("Error: No se recibieron datos de respuesta al insertar")
-            return False
+            return None
 
     except Exception as e:
         print(f"Error al guardar recordatorio en Supabase: {e}")
         notificar_error_base_datos(e, datos.get("chat_id"))
-        return False
+        return None
 
 
 # def obtener_recordatorios_pendientes():
