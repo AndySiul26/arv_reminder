@@ -491,14 +491,18 @@ class DatabaseManager:
                     supa_id = rem['id']
                     
                     # Verificar si existe localmente (por supabase_id)
-                    cursor.execute("SELECT id, last_updated FROM recordatorios WHERE supabase_id = ?", (supa_id,))
+                    cursor.execute("SELECT id, last_updated, sync_status FROM recordatorios WHERE supabase_id = ?", (supa_id,))
                     local_row = cursor.fetchone()
 
                     if local_row:
                         # Existe. ¿Actualizar?
-                        # Estrategia simple: El remoto manda. (Server Authority)
-                        # Salvo que local tenga cambios pendientes ('pending_update').
-                        # Pero aquí simplificamos: Sobreescribir local con remoto.
+                        # Estrategia: Solo sobreescribir si NO hay cambios pendientes locales.
+                        if local_row['sync_status'] != 'synced':
+                             logger.info(f"Registro local {local_row['id']} tiene cambios pendientes ({local_row['sync_status']}). Se omite overwrite remoto.")
+                             continue
+
+                        # Si está synced, asumimos que remoto es autoridad o igual.
+                        # Fix: Mapear campos de supabase a local schema
                         
                         # Fix: Mapear campos de supabase a local schema
                         cursor.execute('''
