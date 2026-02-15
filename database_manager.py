@@ -278,8 +278,18 @@ class DatabaseManager:
                          (datetime.utcnow().isoformat(), recordatorio_id))
             conn.commit()
             
-        # Intentar sync rápida (opcional, dejamos que el job lo haga para no frenar el hilo de envíos)
-        # self.sincronizar_pendientes() 
+    def marcar_como_repetido(self, recordatorio_id: int):
+        """Marca el recordatorio como duplicado (repeticion_creada=1) para evitar duplicidad de recordatorios futuros."""
+        try:
+            with self.get_local_connection() as conn:
+                conn.execute("UPDATE recordatorios SET repeticion_creada = 1, sync_status = 'pending_update', last_updated = ? WHERE id = ?", 
+                             (datetime.utcnow().isoformat(), recordatorio_id))
+                conn.commit()
+            logger.info(f"Recordatorio {recordatorio_id} marcado como 'repeticion_creada' localmente.")
+            return True
+        except Exception as e:
+            logger.error(f"Error al marcar recordatorio {recordatorio_id} como repetido: {e}")
+            return False 
 
     def _guardar_recordatorio_local(self, datos: Dict[str, Any], sync_status: str) -> int:
         # Implementación simple: si viene ID local, es update. Si no, insert.
@@ -438,17 +448,20 @@ class DatabaseManager:
                             exito = supabase_db.actualizar_campos_recordatorio(row['supabase_id'], {"aviso_detenido": True})
                         
                         # Caso B: Marcar como Notificado (notificado=1)
-                        # Nota: Si ambos flags cambiaron, hacemos ambos updates.
                         if row['notificado'] == 1:
-                             # Re-verificamos si ya se hizo update arriba para no duplicar si 'actualizar_campos' es genérico?
-                             # supabase_db.marcar_como_notificado hace solo eso.
-                             if not exito: # Si no se actualizó arriba
+                             if not exito:
                                  exito = supabase_db.marcar_como_notificado(row['supabase_id'])
                              else:
-                                 # Ya se actualizó algo, aseguramos que notificado también esté (o hacemos un update combinado)
-                                 # Por simplicidad, mandamos el segundo update si es necesario
                                  supabase_db.marcar_como_notificado(row['supabase_id'])
-                                 
+
+                        # Caso C: Marcar como Repeticion Creada (repeticion_creada=1)
+                        if row['repeticion_creada'] == 1:
+                             if not exito:
+                                 # Usamos la función existente en supabase_db (que recibe supabase_id)
+                                 exito = supabase_db.marcar_como_repetido(row['supabase_id'])
+                             else:
+                                 supabase_db.marcar_como_repetido(row['supabase_id'])
+
                         if exito:
                             self._actualizar_estado_sync_recordatorio(row['id'], 'synced', row['supabase_id'])
                             logger.info(f"Update local {row['id']} subido a Supabase.")

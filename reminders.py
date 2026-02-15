@@ -6,7 +6,6 @@ from database_manager import db_manager
 from supabase_db import (
     leer_modo_tester, 
     actualizar_estado_chat_id,
-    marcar_como_repetido,
     eliminar_recordatorios_finalizados,
     obtener_chats_sin_zona_horaria
 )
@@ -236,14 +235,8 @@ class AdministradorRecordatorios:
                         # GUARDAR NUEVO RECORDATORIO (USANDO MANAGER)
                         db_manager.guardar_recordatorio(nuevo)
                         
-                        # Marcar el recordatorio original como repeticion_creada
-                        # OJO: marcar_como_repetido es update simple. 
-                        # Si estamos offline, esto podría fallar si se llama directo a supabase_db.
-                        # Idealmente db_manager debería manejar esto también, pero por ahora...
-                        try:
-                           marcar_como_repetido(recordatorio["id"])
-                        except:
-                           pass # Si falla marking, se reintentará luego o quedará sucio pero no critico
+                        # Update local DB immediately to prevent duplication in next loop
+                        db_manager.marcar_como_repetido(recordatorio["id"])
                            
                         print(f"Siguiente recordatorio programado para {nueva_dt.isoformat()}")
                 except Exception as e:
