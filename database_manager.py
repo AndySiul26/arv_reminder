@@ -237,6 +237,21 @@ class DatabaseManager:
             conn.execute("DELETE FROM bajas_pendientes WHERE supabase_id = ?", (supabase_id,))
             conn.commit()
 
+    def eliminar_por_supabase_id(self, supabase_id: int) -> bool:
+        """Elimina un recordatorio local buscando por su supabase_id."""
+        try:
+            with self.get_local_connection() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM recordatorios WHERE supabase_id = ?", (supabase_id,))
+                rows = cursor.rowcount
+                conn.commit()
+            if rows > 0:
+                logger.info(f"Eliminado(s) {rows} registro(s) local(es) con supabase_id={supabase_id}.")
+            return rows > 0
+        except Exception as e:
+            logger.error(f"Error al eliminar local por supabase_id {supabase_id}: {e}")
+            return False
+
     def obtener_recordatorios_pendientes(self) -> List[Dict]:
         """Obtiene recordatorios pendientes de notificar desde LOCAL."""
         with self.get_local_connection() as conn:

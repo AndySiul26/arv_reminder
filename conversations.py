@@ -590,7 +590,13 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             return ""
 
         if texto == "campo_eliminar":
+            # Eliminar de Supabase
             supabase_db.eliminar_recordatorio_por_id(recordatorio_id=record_id)
+            # Eliminar copia local (buscar por supabase_id para evitar zombie)
+            try:
+                db_manager.eliminar_por_supabase_id(supabase_id=record_id)
+            except Exception as e:
+                print(f"[WARN] No se pudo eliminar copia local del recordatorio {record_id}: {e}")
             if conversaciones[chat_id]["id_callback"]:
                 editar_mensaje_texto(chat_id=chat_id, message_id= conversaciones[chat_id]["id_callback"], nuevo_texto="¡Recordatorio eliminado!", formato="Markdown")
             else:
