@@ -590,6 +590,27 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             return ""
 
         if texto == "campo_eliminar":
+            # Construir mensaje de confirmación con detalles
+            nombre = record_data.get("nombre_tarea", "Sin nombre")
+            desc = record_data.get("descripcion", "") or "Sin descripción"
+            fecha_raw = record_data.get("fecha_hora", "")
+            zona = conversaciones[chat_id]["datos"].get("zona_horaria", "")
+            fecha_label = ""
+            if fecha_raw:
+                try:
+                    dt = datetime.fromisoformat(fecha_raw)
+                    if record_data.get("es_formato_utc") and zona:
+                        dt = utilidades.convertir_fecha_utc_a_local(fecha_utc=dt, zona_horaria=zona)
+                    fecha_label = dt.strftime("%d/%m/%Y %H:%M")
+                except:
+                    fecha_label = str(fecha_raw)
+
+            msg_eliminado = (f"🗑 *Recordatorio eliminado*\n\n"
+                             f"📝 *Tarea:* {nombre}\n"
+                             f"📄 *Descripción:* {_truncar(desc, 40)}\n")
+            if fecha_label:
+                msg_eliminado += f"📅 *Fecha:* {fecha_label}\n"
+
             # Eliminar de Supabase
             supabase_db.eliminar_recordatorio_por_id(recordatorio_id=record_id)
             # Eliminar copia local (buscar por supabase_id para evitar zombie)
@@ -598,9 +619,9 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             except Exception as e:
                 print(f"[WARN] No se pudo eliminar copia local del recordatorio {record_id}: {e}")
             if conversaciones[chat_id]["id_callback"]:
-                editar_mensaje_texto(chat_id=chat_id, message_id= conversaciones[chat_id]["id_callback"], nuevo_texto="¡Recordatorio eliminado!", formato="Markdown")
+                editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"], nuevo_texto=msg_eliminado, formato="Markdown")
             else:
-                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="¡Recordatorio eliminado!", formato="Markdown")
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=msg_eliminado, formato="Markdown")
 
             del conversaciones[chat_id]
             return ""
