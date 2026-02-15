@@ -211,25 +211,59 @@ def iniciar_edicion(chat_id, nombre_usuario):
             mensaje="Para editar recordatorios necesito conocer tu zona horaria primero.", func_guardado_data=guardar_info_mensaje_enviado)
         return pedir_zona_horaria_y_actualizar_recordatorios(chat_id, nombre_usuario)
 
-    # 2) Si hay zona, continuamos con la lista
-    recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id)
+    # Guardar datos del usuario
+    conversaciones[chat_id].update({
+        "estado": ESTADO_EDITAR_INICIAL, "wait_callback": True})
+    conversaciones[chat_id]["datos"].update({
+        "usuario": nombre_usuario,
+        "zona_horaria": info.get("zona_horaria"),
+    })
+
+    # 2) Preguntar qué recordatorios quiere ver
+    botones = [
+        {"texto": "📌 Solo pendientes", "data": "filtro_pendientes"},
+        {"texto": "📋 Todos los recordatorios", "data": "filtro_todos"},
+        {"texto": "❌ Cancelar", "data": "cancelar"},
+    ]
+    enviar_telegram(chat_id, tipo="botones",
+        mensaje="¿Qué recordatorios deseas gestionar?",
+        botones=botones, func_guardado_data=guardar_info_mensaje_enviado)
+    return ""
+
+def _mostrar_lista_editar(chat_id, recordatorios):
+    """Muestra la lista numerada de recordatorios para editar."""
     if not recordatorios:
-        enviar_telegram(chat_id, tipo="texto", mensaje="No tienes recordatorios para editar.", func_guardado_data=guardar_info_mensaje_enviado)
+        enviar_telegram(chat_id, tipo="texto",
+            mensaje="No se encontraron recordatorios con ese filtro.", func_guardado_data=guardar_info_mensaje_enviado)
+        del conversaciones[chat_id]
         return ""
 
+    zona = conversaciones[chat_id]["datos"].get("zona_horaria", "")
     texto = "Selecciona el número del recordatorio que quieres editar:\n\n"
     for i, rec in enumerate(recordatorios, start=1):
-        texto += f"{i}. {rec['nombre_tarea']}\n"
+        nombre = rec.get("nombre_tarea", "Sin nombre")
+        # Indicador de estado
+        if rec.get("notificado"):
+            estado = "✅"
+        else:
+            estado = "⏳"
+        # Fecha formateada
+        fecha_raw = rec.get("fecha_hora", "")
+        fecha_label = ""
+        if fecha_raw:
+            try:
+                dt = datetime.fromisoformat(fecha_raw)
+                if rec.get("es_formato_utc") and zona:
+                    dt = utilidades.convertir_fecha_utc_a_local(fecha_utc=dt, zona_horaria=zona)
+                fecha_label = f" · {dt.strftime('%d/%m %H:%M')}"
+            except:
+                pass
+        texto += f"{i}. {estado} {nombre}{fecha_label}\n"
     texto += "\nEnvía el número correspondiente."
 
     conversaciones[chat_id].update({
         "estado": ESTADO_EDITAR_SELECCION, "wait_callback": True})
-    
-    conversaciones[chat_id]["datos"].update({
-            "usuario": nombre_usuario,
-            "zona_horaria": info.get("zona_horaria") ,
-            "lista_editar": recordatorios
-        })
+    conversaciones[chat_id]["datos"]["lista_editar"] = recordatorios
 
     enviar_telegram(chat_id, tipo="texto", mensaje=texto)
     return ""
@@ -423,6 +457,33 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     
     # Procesar según el estado actual de la conversación
     estado_actual = conversaciones[chat_id]["estado"]
+
+     # — FLUJO INICIAL DE EDICIÓN: Filtro pendientes/todos —
+    if estado_actual == ESTADO_EDITAR_INICIAL:
+        if texto == "filtro_pendientes":
+            recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id)
+            recordatorios = [r for r in recordatorios if not r.get("notificado")]
+            if conversaciones[chat_id].get("id_callback"):
+                editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"],
+                    nuevo_texto="📌 Mostrando recordatorios *pendientes*:", formato="Markdown")
+            return _mostrar_lista_editar(chat_id, recordatorios)
+        elif texto == "filtro_todos":
+            recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id)
+            if conversaciones[chat_id].get("id_callback"):
+                editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"],
+                    nuevo_texto="📋 Mostrando *todos* los recordatorios:", formato="Markdown")
+            return _mostrar_lista_editar(chat_id, recordatorios)
+        elif texto == "cancelar":
+            if conversaciones[chat_id].get("id_callback"):
+                editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"],
+                    nuevo_texto="Acción cancelada", formato="Markdown")
+            else:
+                enviar_telegram(chat_id, tipo="texto", mensaje="Acción cancelada")
+            del conversaciones[chat_id]
+            return ""
+        else:
+            enviar_telegram(chat_id, tipo="texto", mensaje="Por favor selecciona una opción.", func_guardado_data=guardar_info_mensaje_enviado)
+            return ""
 
      # — FLUJO DE SELECCIÓN PARA EDICIÓN —
     if estado_actual == ESTADO_EDITAR_SELECCION:
