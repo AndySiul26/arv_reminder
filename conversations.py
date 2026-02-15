@@ -136,6 +136,70 @@ def iniciar_recordatorio(chat_id, nombre_usuario):
     
     return "¿Qué tarea necesitas recordar? Por favor, escribe el nombre de la tarea."
 
+def _truncar(texto, max_len=20):
+    """Trunca un texto a max_len caracteres con '...' si es necesario."""
+    if not texto:
+        return "—"
+    texto = str(texto)
+    return texto[:max_len] + "…" if len(texto) > max_len else texto
+
+def _generar_botones_edicion(record_data, zona_horaria=""):
+    """Genera botones descriptivos para el menú de edición de recordatorios."""
+    sim_map = {"s": "seg", "x": "min", "h": "hrs", "d": "días", "w": "sem", "m": "mes", "a": "año"}
+
+    # Nombre
+    nombre = _truncar(record_data.get("nombre_tarea", ""), 25)
+
+    # Descripción
+    desc = _truncar(record_data.get("descripcion", ""), 20)
+
+    # Fecha/Hora (convertir a local si es UTC)
+    fecha_raw = record_data.get("fecha_hora", "")
+    fecha_label = "—"
+    if fecha_raw:
+        try:
+            dt = datetime.fromisoformat(fecha_raw)
+            es_utc = record_data.get("es_formato_utc", False)
+            if es_utc and zona_horaria:
+                dt = utilidades.convertir_fecha_utc_a_local(fecha_utc=dt, zona_horaria=zona_horaria)
+            fecha_label = dt.strftime("%d/%m/%Y %H:%M")
+        except:
+            fecha_label = str(fecha_raw)[:16]
+
+    # Repetir
+    repetir = record_data.get("repetir", False)
+    intervalo = record_data.get("intervalo_repeticion", "")
+    intervalos = record_data.get("intervalos", 0)
+    if repetir:
+        unidad = sim_map.get(intervalo, intervalo)
+        rep_label = f"Sí · {intervalos}{unidad}"
+    else:
+        rep_label = "No"
+
+    # Intervalo
+    if intervalo:
+        unidad = sim_map.get(intervalo, intervalo)
+        int_label = f"{intervalos} {unidad}"
+    else:
+        int_label = "—"
+
+    # Aviso constante
+    constante = record_data.get("aviso_constante", False)
+    const_label = "Sí" if constante else "No"
+
+    botones = [
+        {"texto": f"📋 Ver Detalles",              "data": "campo_ver_detalles"},
+        {"texto": f"📝 Tarea ({nombre})",           "data": "campo_nombre_tarea"},
+        {"texto": f"📄 Desc. ({desc})",             "data": "campo_descripcion"},
+        {"texto": f"📅 Fecha ({fecha_label})",      "data": "campo_fecha_hora"},
+        {"texto": f"🔁 Repetir ({rep_label})",      "data": "campo_repetir"},
+        {"texto": f"⏱ Intervalo ({int_label})",     "data": "campo_intervalo"},
+        {"texto": f"📢 Constante ({const_label})",  "data": "campo_aviso_constante"},
+        {"texto": "🗑 Eliminar",                    "data": "campo_eliminar"},
+        {"texto": "❌ Cancelar",                    "data": "cancelar"},
+    ]
+    return botones
+
 def iniciar_edicion(chat_id, nombre_usuario):
     """Inicia el flujo de edición de recordatorio, verificando zona antes."""
     
@@ -380,17 +444,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         guardar_estado(chat_id=chat_id,estado= ESTADO_EDITAR_CAMPO)
 
         # Preguntamos qué campo
-        botones = [
-            {"texto": "📋 Ver Detalles",  "data": "campo_ver_detalles"},
-            {"texto": "Nombre de Tarea",         "data": "campo_nombre_tarea"},
-            {"texto": "Descripción",   "data": "campo_descripcion"},
-            {"texto": "Fecha/Hora",    "data": "campo_fecha_hora"},
-            {"texto": "Repetir",       "data": "campo_repetir"},
-            {"texto": "Intervalo",     "data": "campo_intervalo"},
-            {"texto": "Aviso Const.",  "data": "campo_aviso_constante"},
-            {"texto": "Eliminar",  "data": "campo_eliminar"},
-            {"texto": "Cancelar",  "data": "cancelar"},
-        ]
+        botones = _generar_botones_edicion(rec, conversaciones[chat_id]["datos"].get("zona_horaria", ""))
         enviar_telegram(
             chat_id, tipo="botones",
             mensaje="¿Qué campo deseas editar?",
@@ -465,17 +519,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                 enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=msg, formato="Markdown")
 
             # Volver a mostrar el menú de edición
-            botones = [
-                {"texto": "📋 Ver Detalles",  "data": "campo_ver_detalles"},
-                {"texto": "Nombre de Tarea",         "data": "campo_nombre_tarea"},
-                {"texto": "Descripción",   "data": "campo_descripcion"},
-                {"texto": "Fecha/Hora",    "data": "campo_fecha_hora"},
-                {"texto": "Repetir",       "data": "campo_repetir"},
-                {"texto": "Intervalo",     "data": "campo_intervalo"},
-                {"texto": "Aviso Const.",  "data": "campo_aviso_constante"},
-                {"texto": "Eliminar",  "data": "campo_eliminar"},
-                {"texto": "Cancelar",  "data": "cancelar"},
-            ]
+            botones = _generar_botones_edicion(record_data, zona)
             enviar_telegram(
                 chat_id, tipo="botones",
                 mensaje="¿Qué campo deseas editar?",
