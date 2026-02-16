@@ -333,7 +333,7 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
             mensaje = f"*{nombre_usuario}, tus pendientes son:*\n\n" if listado else f"*{nombre_usuario}, no tienes recordatorios pendientes.*"
         else:
             listado = recordatorios
-            mensaje = f"*{nombre_usuario}, todos tus recordatorios:*\n\n" if listado else f"*{nombre_usuario}, no tienes recordatorios.*"
+            mensaje = f"*{nombre_usuario}, todos tus recordatorios ({len(listado)}):*\n\n" if listado else f"*{nombre_usuario}, no tienes recordatorios.*"
 
         try:
             zona_horaria = conversaciones.get(chat_id, {}).get("datos", {}).get("zona_horaria", None)
@@ -342,21 +342,32 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
                 # Formato ISO esperado: '2025-06-06T09:06:00'
                 try:
                     fecha_hora_recordatorio = datetime.strptime(r["fecha_hora"], "%Y-%m-%dT%H:%M:%S")
-                except ValueError:
-                    # Intentar con milisegundos si falla
-                    fecha_hora_recordatorio = datetime.fromisoformat(r["fecha_hora"])
+                except (ValueError, TypeError):
+                    try:
+                        fecha_hora_recordatorio = datetime.fromisoformat(r["fecha_hora"])
+                    except Exception:
+                        fecha_hora_recordatorio = None
 
-                if zona_horaria:
+                if fecha_hora_recordatorio and zona_horaria:
                     fecha_hora_local = utilidades.convertir_fecha_utc_a_local(fecha_utc=fecha_hora_recordatorio, zona_horaria=zona_horaria)
-                else:
+                elif fecha_hora_recordatorio:
                     fecha_hora_local = fecha_hora_recordatorio
+                else:
+                    fecha_hora_local = None
 
-                mensaje += f"• *{r['nombre_tarea']}*: {r['descripcion']}\n"
-                mensaje += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
-                mensaje += f"  🔁 Repetible: {'Sí' if r['repetir'] else 'No'}\n"
-                if r['repetir']:
-                    mensaje += f"  ⌚ Intervalo: Cada {r['intervalos']} {significado_tiempo(r['intervalo_repeticion'], (r['intervalos'] > 1))}\n"
-                mensaje += f"  🔔 Aviso constante: {'Sí' if r['aviso_constante'] else 'No'}\n\n"
+                # Escapar caracteres especiales de Markdown en campos de usuario
+                nombre_tarea_safe = str(r.get('nombre_tarea', '')).replace('*', '').replace('_', ' ').replace('`', '')
+                descripcion_safe = str(r.get('descripcion', '')).replace('*', '').replace('_', ' ').replace('`', '')
+
+                bloque = f"• *{nombre_tarea_safe}*: {descripcion_safe}\n"
+                if fecha_hora_local:
+                    bloque += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
+                bloque += f"  🔁 Repetible: {'Sí' if r.get('repetir') else 'No'}\n"
+                if r.get('repetir'):
+                    bloque += f"  ⌚ Intervalo: Cada {r.get('intervalos', 0)} {significado_tiempo(r.get('intervalo_repeticion', ''), (int(r.get('intervalos', 0)) > 1))}\n"
+                bloque += f"  🔔 Aviso constante: {'Sí' if r.get('aviso_constante') else 'No'}\n\n"
+                
+                mensaje += bloque
                 
         except Exception as e:
             print(f"Error al mostrar los recordatorios del usuario {chat_id}:", str(e))
@@ -367,11 +378,24 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
                 enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=texto_error, formato="markdown")
             return "" # Finalizar ejecución si hubo error
 
-        # Finalmente, editar el mensaje original con los resultados
+        # Enviar resultado — dividir si excede el límite de Telegram (4096 chars)
+        LIMITE_TELEGRAM = 4000  # Margen de seguridad
         if data:
-            editar_mensaje_texto(chat_id=chat_id, message_id=data["message_id"], nuevo_texto=mensaje, formato="markdown")
+            # Editar el primer mensaje con el inicio del contenido
+            primer_trozo = mensaje[:LIMITE_TELEGRAM]
+            editar_mensaje_texto(chat_id=chat_id, message_id=data["message_id"], nuevo_texto=primer_trozo, formato="markdown")
+            # Si hay más contenido, enviarlo en mensajes adicionales
+            resto = mensaje[LIMITE_TELEGRAM:]
+            while resto:
+                trozo = resto[:LIMITE_TELEGRAM]
+                resto = resto[LIMITE_TELEGRAM:]
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=trozo, formato="markdown")
         else:
-            enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=mensaje, formato="markdown")
+            # Sin message_id, enviar todo en trozos
+            while mensaje:
+                trozo = mensaje[:LIMITE_TELEGRAM]
+                mensaje = mensaje[LIMITE_TELEGRAM:]
+                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=trozo, formato="markdown")
 
     else:
         mensaje = f"{nombre_usuario}, no tienes recordatorios registrados aún."
