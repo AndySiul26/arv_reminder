@@ -308,12 +308,15 @@ def guardar_datos(chat_id, nuevas_conversaciones = None, guardar_zona_horaria = 
     return False
 
 def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
-    # [{'id': 23, 'chat_id': '54655066', 'usuario': 'Andy', 'nombre_tarea': 'Ir por licencia', 'descripcion': 'Documentacion', 'fecha_hora': '2025-06-06T09:06:00', 'creado_en': '2025-06-06T09:04:10.873179', 'notificado': True, 'aviso_constante': True, 'aviso_detenido': True, 'repetir': False, 'intervalo_repeticion': '', 'intervalos': 0, 'es_formato_utc': False}] 
     global conversaciones
     recordatorios=None
     data=None
     try:
-        recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
+        # PRIMERO: Leer de SQLite local (rápido y sin dependencia de red)
+        recordatorios = db_manager.obtener_recordatorios_usuario_local(chat_id=str(chat_id))
+        # FALLBACK: Si local está vacío, intentar Supabase
+        if not recordatorios:
+            recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
         datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
         data = datos_msg.get("result", None)
         mensaje = ""

@@ -283,6 +283,22 @@ class DatabaseManager:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
+    def obtener_recordatorios_usuario_local(self, chat_id: str) -> List[Dict]:
+        """Obtiene TODOS los recordatorios de un usuario desde SQLite local."""
+        try:
+            with self.get_local_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM recordatorios 
+                    WHERE chat_id = ?
+                    ORDER BY fecha_hora ASC
+                ''', (str(chat_id),))
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error al obtener recordatorios locales para {chat_id}: {e}")
+            return []
+
     def detener_avisos_constantes(self, chat_id: str) -> bool:
         """Detiene los avisos constantes para un chat en local y encola sync."""
         try:
@@ -545,10 +561,17 @@ class DatabaseManager:
                              logger.info(f"Registro local {local_row['id']} tiene cambios pendientes ({local_row['sync_status']}). Se omite overwrite remoto.")
                              continue
 
-                        # Si está synced, asumimos que remoto es autoridad o igual.
-                        # Fix: Mapear campos de supabase a local schema
-                        
-                        # Fix: Mapear campos de supabase a local schema
+                        # REGLA: Flags unidireccionales (0→1) NUNCA se revierten.
+                        # Si local ya tiene notificado=1, aviso_detenido=1 o repeticion_creada=1,
+                        # NO permitir que datos stale de Supabase los regresen a 0.
+                        local_notificado = local_row['notificado'] if 'notificado' in local_row.keys() else 0
+                        local_aviso_detenido = local_row['aviso_detenido'] if 'aviso_detenido' in local_row.keys() else 0
+                        local_repeticion_creada = local_row['repeticion_creada'] if 'repeticion_creada' in local_row.keys() else 0
+
+                        val_notificado = max(local_notificado, 1 if rem.get("notificado") else 0)
+                        val_aviso_detenido = max(local_aviso_detenido, 1 if rem.get("aviso_detenido") else 0)
+                        val_repeticion_creada = max(local_repeticion_creada, 1 if rem.get("repeticion_creada") else 0)
+
                         cursor.execute('''
                             UPDATE recordatorios SET
                                 chat_id=?, usuario=?, nombre_tarea=?, descripcion=?, fecha_hora=?, 
@@ -558,11 +581,11 @@ class DatabaseManager:
                             WHERE id=?
                         ''', (
                             str(rem["chat_id"]), rem["usuario"], rem["nombre_tarea"], rem.get("descripcion"),
-                            rem.get("fecha_hora"), 1 if rem.get("notificado") else 0,
+                            rem.get("fecha_hora"), val_notificado,
                             1 if rem.get("es_formato_utc") else 0, 1 if rem.get("aviso_constante") else 0,
-                            1 if rem.get("aviso_detenido") else 0, 1 if rem.get("repetir") else 0,
+                            val_aviso_detenido, 1 if rem.get("repetir") else 0,
                             rem.get("intervalo_repeticion"), rem.get("intervalos"),
-                            1 if rem.get("repeticion_creada") else 0,
+                            val_repeticion_creada,
                             datetime.utcnow().isoformat(),
                             local_row['id']
                         ))

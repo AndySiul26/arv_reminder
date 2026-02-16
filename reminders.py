@@ -71,8 +71,8 @@ class AdministradorRecordatorios:
         schedule.every(5).minutes.do(self.verificar_actualizaciones)
         
         # --- SINCRONIZACIÓN BACKGROUND ---
-        # Intentar subir pendientes cada 2 minutos
-        schedule.every(2).minutes.do(db_manager.sincronizar_pendientes) 
+        # Sync cada 3 minutos (después del checker de 1 min) para evitar race conditions
+        schedule.every(3).minutes.do(db_manager.sincronizar_pendientes) 
 
         # Bucle principal
         while self.activo:
