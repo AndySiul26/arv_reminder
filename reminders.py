@@ -1,8 +1,7 @@
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
-# Usamos el manager para guardar, que maneja la lógica dual
-from database_manager import db_manager 
-# Mantenemos imports de supabase_db para funciones que aún no migramos o auxiliares
+# MIGRACIÓN: Supabase es la única fuente de verdad
+import supabase_db
 from supabase_db import (
     leer_modo_tester, 
     actualizar_estado_chat_id,
@@ -54,9 +53,6 @@ class AdministradorRecordatorios:
 
     def _ejecutar(self):
         """Método principal que se ejecuta en el hilo"""
-        
-        # Inicializar DB local
-        db_manager.inicializar_db_local()
 
         # --- CORRECCIÓN INICIAL ---
         primero_ok = self.corregir_recordatorios()
@@ -69,10 +65,14 @@ class AdministradorRecordatorios:
         verificar_recordatorios_ahora()
         schedule.every(1).minutes.do(self.verificar_recordatorios)
         schedule.every(5).minutes.do(self.verificar_actualizaciones)
-        
-        # --- SINCRONIZACIÓN BACKGROUND ---
-        # Sync cada 3 minutos (después del checker de 1 min) para evitar race conditions
-        schedule.every(3).minutes.do(db_manager.sincronizar_pendientes) 
+
+        # --- BACKUP AUTOMÁTICO: Supabase → Docker Postgres cada 30 min ---
+        try:
+            from backup_db import ejecutar_backup
+            schedule.every(30).minutes.do(ejecutar_backup)
+            print("Backup automático programado cada 30 minutos")
+        except ImportError:
+            print("[WARN] backup_db no disponible. Backup deshabilitado.")
 
         # Bucle principal
         while self.activo:
@@ -92,12 +92,11 @@ class AdministradorRecordatorios:
 
     def verificar_recordatorios(self):
         """Verifica si hay recordatorios pendientes y los envía"""
-        print(f"[{datetime.now().isoformat()}] Verificando recordatorios (Fuente: SQLite Local)...")
-        # AHORA LEEMOS DE LA BD LOCAL
-        pendientes = db_manager.obtener_recordatorios_pendientes()
+        print(f"[{datetime.now().isoformat()}] Verificando recordatorios (Fuente: Supabase)...")
+        # LECTURA DIRECTA DE SUPABASE (ya filtra por fecha vencida)
+        pendientes = supabase_db.obtener_recordatorios_pendientes()
         
-        # Filtro adicional de fecha aquí, ya que el SQL trae todos los 'no notificados' 
-        # (Optimizacion: mover filtro fecha al SQL en db_manager si crece mucho)
+        # Filtro adicional de fecha (Supabase ya filtra parcialmente)
         ahora_utc = datetime.utcnow()
         
         for recordatorio in pendientes:
@@ -191,8 +190,8 @@ class AdministradorRecordatorios:
             except Exception as e: 
                 print("Error al guardar datos de mensaje en enviar recordatorio:", str(e))
 
-            # Marcar como notificado (LOCALMENTE + INTENTO SYNC)
-            db_manager.marcar_como_notificado(recordatorio["id"])
+            # Marcar como notificado directamente en Supabase
+            supabase_db.marcar_como_notificado(recordatorio["id"])
 
             # Si debe repetirse, crear siguiente
             if repetir and recordatorio.get("fecha_hora") and simbolo and num > 0 and not repeticion_creada:
@@ -234,11 +233,11 @@ class AdministradorRecordatorios:
                             "aviso_detenido":    False, # Resetear estado
                             "notificado":        False  # Resetear estado
                         }
-                        # GUARDAR NUEVO RECORDATORIO (USANDO MANAGER)
-                        db_manager.guardar_recordatorio(nuevo)
+                        # GUARDAR NUEVO RECORDATORIO DIRECTAMENTE EN SUPABASE
+                        supabase_db.guardar_recordatorio(nuevo)
                         
-                        # Update local DB immediately to prevent duplication in next loop
-                        db_manager.marcar_como_repetido(recordatorio["id"])
+                        # Marcar el original como repetición creada
+                        supabase_db.marcar_como_repetido(recordatorio["id"])
                            
                         print(f"Siguiente recordatorio programado para {nueva_dt.isoformat()}")
                 except Exception as e:

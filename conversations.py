@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
-from database_manager import db_manager
+# db_manager ELIMINADO — Supabase es la única fuente de verdad
 import utilidades, os
 import json
 
@@ -312,11 +312,8 @@ def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
     recordatorios=None
     data=None
     try:
-        # PRIMERO: Leer de SQLite local (rápido y sin dependencia de red)
-        recordatorios = db_manager.obtener_recordatorios_usuario_local(chat_id=str(chat_id))
-        # FALLBACK: Si local está vacío, intentar Supabase
-        if not recordatorios:
-            recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
+        # LECTURA DIRECTA DE SUPABASE (fuente única de verdad)
+        recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
         datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
         data = datos_msg.get("result", None)
         mensaje = ""
@@ -646,13 +643,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             if fecha_label:
                 msg_eliminado += f"📅 *Fecha:* {fecha_label}\n"
 
-            # Eliminar de Supabase
+            # Eliminar de Supabase (fuente única)
             supabase_db.eliminar_recordatorio_por_id(recordatorio_id=record_id)
-            # Eliminar copia local (buscar por supabase_id para evitar zombie)
-            try:
-                db_manager.eliminar_por_supabase_id(supabase_id=record_id)
-            except Exception as e:
-                print(f"[WARN] No se pudo eliminar copia local del recordatorio {record_id}: {e}")
             if conversaciones[chat_id]["id_callback"]:
                 editar_mensaje_texto(chat_id=chat_id, message_id=conversaciones[chat_id]["id_callback"], nuevo_texto=msg_eliminado, formato="Markdown")
             else:
@@ -1112,21 +1104,8 @@ def procesar_reporte(chat_id, texto, nombre_usuario):
         "descripcion": texto,
         "fecha_hora": utilidades.hora_utc_servidor_segun_zona_host().isoformat(),
     }
-    # Guardar en Supabase
+    # Guardar en Supabase (fuente única)
     reporte_id = supabase_db.guardar_reporte(datos_reporte)
-
-    # Guardar local
-    try:
-        with db_manager.get_local_connection() as conn:
-            conn.execute(
-                "INSERT INTO reportes (chat_id, usuario, descripcion, fecha_hora, estado, supabase_id, sync_status, last_updated) "
-                "VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?)",
-                (str(chat_id), nombre_usuario, texto, datos_reporte["fecha_hora"],
-                 reporte_id, 'synced' if reporte_id else 'pending',
-                 utilidades.hora_utc_servidor_segun_zona_host().isoformat()))
-            conn.commit()
-    except Exception as e:
-        print(f"[WARN] Error guardando reporte local: {e}")
 
     # Notificar al admin
     TEST_USER_ID = os.environ.get("TELEGRAM_TEST_USER_ID", "")
@@ -1213,24 +1192,17 @@ def modificar_mensajes_avisos_a_detenidos(chat_id):
 # NUEVA FUNCIÓN PARA EJECUTAR EN SEGUNDO PLANO
 def _detener_avisos_background(chat_id, message_id):
     """
-    Esta función contiene la lógica lenta que se ejecutará en un hilo separado.
+    Detiene avisos constantes directamente en Supabase.
     """
-    # from supabase_db import cambiar_estado_aviso_detenido # YA NO SE USA DIRECTO
-
-    # 1. Actualiza la base de datos LOCAL para detener futuros avisos
-    #    y encola la sincronización.
-    exito = db_manager.detener_avisos_constantes(chat_id)
+    # Actualizar directamente en Supabase (fuente única)
+    exito = supabase_db.cambiar_estado_aviso_detenido(chat_id, True)
 
     if exito:
-        # 2. Forzamos subida inmediata a Supabase para que no se pierda si se reinicia
-        db_manager.sincronizar_local_a_remoto()
-
-        # 3. Edita los mensajes que ya fueron enviados
+        # Edita los mensajes que ya fueron enviados
         modificar_mensajes_avisos_a_detenidos(chat_id)
-        # 4. Edita el mensaje de "Procesando..." para confirmar que todo terminó
+        # Confirmar
         editar_mensaje_texto(chat_id, message_id, "✅ ¡Listo! Todos los avisos constantes han sido detenidos.")
     else:
-        # Informa al usuario si algo salió mal
         editar_mensaje_texto(chat_id, message_id, "❌ Hubo un error al intentar detener los avisos.")
 
 

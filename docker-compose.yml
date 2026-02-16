@@ -4,17 +4,40 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # Map host 8443 to container 8443 (Required by Telegram)
       - "8443:8443"
     env_file:
       - .env
     environment:
       - PORT=8443
-      # NOTE: Must include the port 8443 in the URL
       - WEBHOOK_URL=https://arvreminder.virtualdigitalprint.com:8443/webhook
       - LOCAL_MODE=false
-      # Timezone Configuration (Important for correct reminder scheduling)
       - TZ=${TZ:-UTC}
       - ZONA_SERVIDOR=${ZONA_SERVIDOR:-UTC}
+      - BACKUP_PG_HOST=postgres_backup
+      - BACKUP_PG_PORT=5432
+      - BACKUP_PG_DB=arv_backup
+      - BACKUP_PG_USER=arv_user
+      - BACKUP_PG_PASS=${BACKUP_PG_PASS:-arv_secure_pass}
+    depends_on:
+      postgres_backup:
+        condition: service_healthy
+
+  postgres_backup:
+    image: postgres:16-alpine
+    container_name: arv_postgres_backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: arv_backup
+      POSTGRES_USER: arv_user
+      POSTGRES_PASSWORD: ${BACKUP_PG_PASS:-arv_secure_pass}
     volumes:
-      - ./local_backup.db:/app/local_backup.db
+      - pg_backup_data:/var/lib/postgresql/data
+      - ./init_backup_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U arv_user -d arv_backup" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_backup_data:

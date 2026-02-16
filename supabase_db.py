@@ -7,6 +7,30 @@ from utilidades import hora_utc_servidor_segun_zona_host
 from services import enviar_telegram
 import socket
 import time
+import logging
+from functools import wraps
+
+logger = logging.getLogger("supabase_db")
+
+# Decorator para reintentos automáticos en operaciones críticas
+def con_reintentos(max_reintentos=3, espera_base=1):
+    """Retry decorator con backoff exponencial para funciones que llaman a Supabase."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for intento in range(max_reintentos):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if intento == max_reintentos - 1:
+                        logger.error(f"[{func.__name__}] Falló después de {max_reintentos} intentos: {e}")
+                        raise
+                    espera = espera_base * (intento + 1)
+                    logger.warning(f"[{func.__name__}] Intento {intento+1} falló ({e}). Reintentando en {espera}s...")
+                    time.sleep(espera)
+            return None
+        return wrapper
+    return decorator
 
 # Set global timeout for all socket operations (including Supabase HTTP requests)
 # to prevent the app from hanging indefinitely during outages.
@@ -83,6 +107,7 @@ def notificar_error_base_datos(e, chat_id_usuario=None):
         except Exception as err:
             print(f"Error al notificar al usuario {chat_id_usuario}: {err}")
 
+@con_reintentos(max_reintentos=3)
 def guardar_recordatorio(datos):
     """Guarda un nuevo recordatorio en Supabase con todos los campos necesarios."""
     if not supabase:
@@ -232,6 +257,7 @@ def guardar_reporte(datos):
         return None
 
 
+@con_reintentos(max_reintentos=2)
 def obtener_recordatorios_pendientes(pagina_tamano=1000):
     """Obtiene todos los recordatorios pendientes de notificar, incluyendo los que deben repetirse constantemente, con paginación."""
     if not supabase:
@@ -287,6 +313,7 @@ def obtener_recordatorios_pendientes(pagina_tamano=1000):
         return []
 
 
+@con_reintentos(max_reintentos=3)
 def marcar_como_notificado(recordatorio_id):
     """Marca un recordatorio como notificado"""
     if not supabase:
@@ -306,6 +333,7 @@ def marcar_como_notificado(recordatorio_id):
         print(f"Error al marcar recordatorio como repeticion_creada: {e}")
         return False
     
+@con_reintentos(max_reintentos=3)
 def marcar_como_repetido(recordatorio_id):
     """Marca un recordatorio como repetido"""
     if not supabase:
@@ -325,6 +353,7 @@ def marcar_como_repetido(recordatorio_id):
         print(f"Error al marcar recordatorio como repeticion_creada en el recordatorio {recordatorio_id}")
         return False
     
+@con_reintentos(max_reintentos=3)
 def cambiar_estado_aviso_detenido(chat_id, estado):
     """
     Cambia el estado de 'aviso_detenido' para todos los recordatorios de un chat_id.
@@ -357,6 +386,7 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
         return False
 
 
+@con_reintentos(max_reintentos=2)
 def obtener_recordatorios_usuario(chat_id):
     """Obtiene todos los recordatorios de un usuario específico"""
     if not supabase:
@@ -402,6 +432,7 @@ def eliminar_recordatorios_finalizados():
         print(f"Error al eliminar recordatorios: {e}")
         return False
 
+@con_reintentos(max_reintentos=3)
 def eliminar_recordatorio_por_id(recordatorio_id):
     """Elimina un recordatorio específico por su ID"""
     if not supabase:
