@@ -117,6 +117,44 @@ def enviar_mensaje_con_botones(chat_id, mensaje, botones, formato=None):
         payload["parse_mode"] = formato
     return requests.post(url, json=payload)
 
+def enviar_mensaje_con_grid(chat_id, mensaje, filas_botones, formato=None):
+    """Envía un mensaje con botones organizados en filas personalizadas (grid).
+    
+    filas_botones: lista de listas de botones.
+    Cada sublista = una fila. Cada botón: {"texto": str, "data": str}
+    Ejemplo: [[btn1, btn2], [btn3, btn4], [btn_cancel]]
+    """
+    url = f"{BASE_URL}/sendMessage"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": b["texto"], "callback_data": b["data"]} for b in fila]
+            for fila in filas_botones
+        ]
+    }
+    payload = {"chat_id": chat_id, "text": mensaje, "reply_markup": keyboard}
+    if formato:
+        payload["parse_mode"] = formato
+    return requests.post(url, json=payload)
+
+def editar_mensaje_con_grid(chat_id, message_id, mensaje, filas_botones, formato=None):
+    """Edita texto + botones grid de un mensaje existente."""
+    url = f"{BASE_URL}/editMessageText"
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": b["texto"], "callback_data": b["data"]} for b in fila]
+            for fila in filas_botones
+        ]
+    }
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": mensaje,
+        "reply_markup": keyboard
+    }
+    if formato:
+        payload["parse_mode"] = formato
+    return requests.post(url, json=payload)
+
 def enviar_documento(chat_id, ruta, caption="", formato=None):
     url = f"{BASE_URL}/sendDocument"
     with open(ruta, "rb") as doc:

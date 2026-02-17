@@ -1,7 +1,7 @@
 import threading
 # ... el resto de tus importaciones mod detener avisos
 from datetime import datetime, timedelta
-from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto
+from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
@@ -14,11 +14,16 @@ import plantillas
 # Guarda la última vez (UTC) que pedimos zona para cada chat
 _last_zona_request: dict[str, datetime] = {}
 
-# — NUEVOS ESTADOS PARA EDICIÓN —
+# — ESTADOS PARA EDICIÓN —
 ESTADO_EDITAR_INICIAL        = "editar_inicial"
 ESTADO_EDITAR_SELECCION      = "editar_seleccion"
 ESTADO_EDITAR_CAMPO          = "editar_campo"
 ESTADO_EDITAR_VALOR          = "editar_valor"
+# — ESTADOS BATCH (selección múltiple) —
+ESTADO_BATCH_SELECT          = "batch_select"
+ESTADO_BATCH_ACCION          = "batch_accion"
+ESTADO_BATCH_INTERVALO       = "batch_intervalo"
+BATCH_POR_PAGINA = 4  # Recordatorios por página en selección batch
 # Estados de conversación
 ESTADO_INICIAL = "inicial"
 ESTADO_NOMBRE_TAREA = "nombre_tarea"
@@ -232,42 +237,127 @@ def iniciar_edicion(chat_id, nombre_usuario):
     return ""
 
 def _mostrar_lista_editar(chat_id, recordatorios):
-    """Muestra la lista numerada de recordatorios para editar."""
+    """Inicia el grid de selección batch de recordatorios."""
     if not recordatorios:
         enviar_telegram(chat_id, tipo="texto",
             mensaje="No se encontraron recordatorios con ese filtro.", func_guardado_data=guardar_info_mensaje_enviado)
         del conversaciones[chat_id]
         return ""
 
-    zona = conversaciones[chat_id]["datos"].get("zona_horaria", "")
-    texto = "Selecciona el número del recordatorio que quieres editar:\n\n"
-    for i, rec in enumerate(recordatorios, start=1):
+    conversaciones[chat_id]["datos"]["batch_lista"] = recordatorios
+    conversaciones[chat_id]["datos"]["batch_seleccionados"] = set()
+    conversaciones[chat_id]["datos"]["batch_pagina"] = 0
+    conversaciones[chat_id]["datos"]["lista_editar"] = recordatorios  # compatibilidad
+    conversaciones[chat_id].update({"estado": ESTADO_BATCH_SELECT, "wait_callback": True})
+
+    return _mostrar_batch_select(chat_id, pagina=0)
+
+
+def _mostrar_batch_select(chat_id, pagina=0, message_id=None):
+    """Genera y muestra/actualiza el grid de botones para selección batch."""
+    datos = conversaciones[chat_id]["datos"]
+    lista = datos["batch_lista"]
+    seleccionados = datos["batch_seleccionados"]
+    zona = datos.get("zona_horaria", "")
+
+    total = len(lista)
+    total_paginas = max(1, (total + BATCH_POR_PAGINA - 1) // BATCH_POR_PAGINA)
+    pagina = max(0, min(pagina, total_paginas - 1))
+    datos["batch_pagina"] = pagina
+
+    inicio = pagina * BATCH_POR_PAGINA
+    fin = min(inicio + BATCH_POR_PAGINA, total)
+
+    # Generar filas de botones (2 por fila)
+    filas = []
+    fila_actual = []
+    for i in range(inicio, fin):
+        rec = lista[i]
         nombre = rec.get("nombre_tarea", "Sin nombre")
-        # Indicador de estado
-        if rec.get("notificado"):
-            estado = "✅"
+        if i in seleccionados:
+            label = f"{i+1}. {_truncar(nombre, 15)} ✅"
         else:
-            estado = "⏳"
-        # Fecha formateada
-        fecha_raw = rec.get("fecha_hora", "")
-        fecha_label = ""
-        if fecha_raw:
+            label = f"{i+1}. {_truncar(nombre, 20)}"
+        fila_actual.append({"texto": label, "data": f"sel:{i}"})
+        if len(fila_actual) == 2:
+            filas.append(fila_actual)
+            fila_actual = []
+    if fila_actual:
+        filas.append(fila_actual)
+
+    # Fila de paginación
+    if total_paginas > 1:
+        nav = []
+        if pagina > 0:
+            nav.append({"texto": "⬅️ Anterior", "data": f"pg:{pagina-1}"})
+        nav.append({"texto": f"{pagina+1}/{total_paginas}", "data": "pg_noop"})
+        if pagina < total_paginas - 1:
+            nav.append({"texto": "Siguiente ➡️", "data": f"pg:{pagina+1}"})
+        filas.append(nav)
+
+    # Botón de acción si hay seleccionados
+    if seleccionados:
+        n = len(seleccionados)
+        filas.append([{"texto": f"✏️ Editar seleccionados ({n})", "data": "batch_editar"}])
+
+    # Botón cancelar
+    filas.append([{"texto": "❌ Cancelar edición", "data": "cancelar"}])
+
+    msg = f"Selecciona los recordatorios que deseas editar:\n(Página {pagina+1} de {total_paginas} · {total} recordatorios)"
+
+    if message_id:
+        ret = editar_mensaje_con_grid(chat_id, message_id, msg, filas)
+    else:
+        ret = enviar_mensaje_con_grid(chat_id, msg, filas)
+        # Guardar message_id para futuras actualizaciones
+        if ret and ret.status_code == 200:
             try:
-                dt = datetime.fromisoformat(fecha_raw)
-                if rec.get("es_formato_utc") and zona:
-                    dt = utilidades.convertir_fecha_utc_a_local(fecha_utc=dt, zona_horaria=zona)
-                fecha_label = f" · {dt.strftime('%d/%m %H:%M')}"
+                data = ret.json()
+                mid = data.get("result", {}).get("message_id")
+                if mid:
+                    datos["batch_message_id"] = mid
+                    conversaciones[chat_id]["id_callback"] = mid
             except:
                 pass
-        texto += f"{i}. {estado} {nombre}{fecha_label}\n"
-    texto += "\nEnvía el número correspondiente."
-
-    conversaciones[chat_id].update({
-        "estado": ESTADO_EDITAR_SELECCION, "wait_callback": True})
-    conversaciones[chat_id]["datos"]["lista_editar"] = recordatorios
-
-    enviar_telegram(chat_id, tipo="texto", mensaje=texto)
     return ""
+
+
+def _mostrar_menu_batch(chat_id, message_id):
+    """Muestra el menú de acciones batch para múltiples recordatorios."""
+    n = len(conversaciones[chat_id]["datos"]["batch_seleccionados"])
+    filas = [
+        [{"texto": f"🗑️ Eliminar {n} recordatorios", "data": "batch_eliminar"}],
+        [{"texto": "🔁 Cambiar repetición", "data": "batch_repetir"}],
+        [{"texto": "⏱️ Cambiar intervalos", "data": "batch_cambiar_intervalo"}],
+        [{"texto": "↩️ Volver a selección", "data": "batch_volver"}],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ]
+    conversaciones[chat_id]["estado"] = ESTADO_BATCH_ACCION
+    conversaciones[chat_id]["wait_callback"] = True
+    editar_mensaje_con_grid(chat_id, message_id,
+        f"Acción para {n} recordatorios seleccionados:", filas)
+    return ""
+
+
+def _parsear_intervalo_raw(texto):
+    """Parsea un intervalo de texto como '2h', '1:d', '30x'. Retorna (num, simbolo) o None."""
+    texto = texto.strip().lower()
+    unidades = ["s", "x", "h", "d", "w", "m", "a"]
+    
+    # Formato con ":"
+    if ":" in texto:
+        partes = texto.split(":")
+        if len(partes) == 2 and partes[0].isdigit() and partes[1] in unidades:
+            return int(partes[0]), partes[1]
+    else:
+        # Formato sin ":": buscar unidad al final
+        for i, char in enumerate(reversed(texto)):
+            if char in unidades:
+                num = texto[:-i-1]
+                if num.isdigit():
+                    return int(num), char
+                break
+    return None
 
 def guardar_info_mensaje_enviado(chat_id, info, nuevas_conversaciones=None):
     global conversaciones
@@ -517,7 +607,237 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             enviar_telegram(chat_id, tipo="texto", mensaje="Por favor selecciona una opción.", func_guardado_data=guardar_info_mensaje_enviado)
             return ""
 
-     # — FLUJO DE SELECCIÓN PARA EDICIÓN —
+    # — FLUJO BATCH: SELECCIÓN MÚLTIPLE CON BOTONES —
+    if estado_actual == ESTADO_BATCH_SELECT:
+        datos = conversaciones[chat_id]["datos"]
+        msg_id = datos.get("batch_message_id") or conversaciones[chat_id].get("id_callback")
+
+        if texto.startswith("sel:"):
+            # Toggle selección de un recordatorio
+            try:
+                idx = int(texto.split(":")[1])
+                seleccionados = datos["batch_seleccionados"]
+                if idx in seleccionados:
+                    seleccionados.discard(idx)
+                else:
+                    seleccionados.add(idx)
+                _mostrar_batch_select(chat_id, datos["batch_pagina"], msg_id)
+            except:
+                pass
+            return ""
+
+        elif texto.startswith("pg:"):
+            # Paginación
+            try:
+                pagina = int(texto.split(":")[1])
+                datos["batch_pagina"] = pagina
+                _mostrar_batch_select(chat_id, pagina, msg_id)
+            except:
+                pass
+            return ""
+
+        elif texto == "pg_noop":
+            # Botón de número de página — no hacer nada
+            return ""
+
+        elif texto == "batch_editar":
+            seleccionados = datos["batch_seleccionados"]
+            if not seleccionados:
+                return ""
+
+            if len(seleccionados) == 1:
+                # Un solo recordatorio: redirigir al flujo de edición individual
+                idx = list(seleccionados)[0]
+                rec = datos["batch_lista"][idx]
+                conversaciones[chat_id]["datos"].update({
+                    "record_id": rec["id"],
+                    "record_data": rec
+                })
+                guardar_estado(chat_id=chat_id, estado=ESTADO_EDITAR_CAMPO)
+                botones = _generar_botones_edicion(rec, datos.get("zona_horaria", ""))
+                nombre = rec.get("nombre_tarea", "Sin nombre")
+                editar_mensaje_con_botones(chat_id, msg_id,
+                    f"Editando: *{_truncar(nombre, 30)}*\n¿Qué campo deseas editar?",
+                    botones, formato="Markdown")
+                conversaciones[chat_id]["wait_callback"] = True
+                return ""
+            else:
+                # Múltiples: mostrar menú batch
+                return _mostrar_menu_batch(chat_id, msg_id)
+
+        elif texto == "cancelar":
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id, "Edición cancelada.")
+            else:
+                enviar_telegram(chat_id, tipo="texto", mensaje="Edición cancelada.")
+            del conversaciones[chat_id]
+            return ""
+
+        return ""
+
+    # — FLUJO BATCH: ACCIÓN PARA MÚLTIPLES RECORDATORIOS —
+    if estado_actual == ESTADO_BATCH_ACCION:
+        datos = conversaciones[chat_id]["datos"]
+        seleccionados = datos["batch_seleccionados"]
+        lista = datos["batch_lista"]
+        msg_id = datos.get("batch_message_id") or conversaciones[chat_id].get("id_callback")
+
+        if texto == "batch_eliminar":
+            eliminados = 0
+            for idx in seleccionados:
+                try:
+                    rec = lista[idx]
+                    supabase_db.eliminar_recordatorio_por_id(rec["id"])
+                    eliminados += 1
+                except Exception as e:
+                    print(f"[WARN] Error eliminando recordatorio batch {idx}: {e}")
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id,
+                    f"✅ {eliminados} recordatorios eliminados correctamente.")
+            else:
+                enviar_telegram(chat_id, tipo="texto",
+                    mensaje=f"✅ {eliminados} recordatorios eliminados correctamente.")
+            del conversaciones[chat_id]
+            return ""
+
+        elif texto == "batch_repetir":
+            # Preguntar si activar o desactivar
+            filas = [
+                [{"texto": "✅ Activar repetición", "data": "rep_si"}],
+                [{"texto": "❌ Desactivar repetición", "data": "rep_no"}],
+                [{"texto": "↩️ Volver", "data": "batch_volver"}],
+            ]
+            editar_mensaje_con_grid(chat_id, msg_id,
+                f"¿Activar o desactivar la repetición para {len(seleccionados)} recordatorios?", filas)
+            return ""
+
+        elif texto == "rep_si":
+            # Pedir intervalo
+            conversaciones[chat_id]["estado"] = ESTADO_BATCH_INTERVALO
+            conversaciones[chat_id]["datos"]["batch_tipo_intervalo"] = "activar_repeticion"
+            conversaciones[chat_id]["wait_callback"] = False
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id,
+                    f"Escribe el intervalo de repetición para {len(seleccionados)} recordatorios:\n\n"
+                    "Formato: número + unidad\n"
+                    "Ejemplo: 2h (2 horas), 1d (1 día), 30x (30 min)\n"
+                    "Unidades: s=seg, x=min, h=hrs, d=días, w=sem, m=mes, a=año")
+            return ""
+
+        elif texto == "rep_no":
+            # Desactivar repetición para todos
+            exitos = 0
+            for idx in seleccionados:
+                try:
+                    rec = lista[idx]
+                    actualizar_campos_recordatorio(rec["id"], {
+                        "repetir": False, "intervalo_repeticion": None, "intervalos": 0
+                    })
+                    exitos += 1
+                except Exception as e:
+                    print(f"[WARN] Error desactivando repetición batch {idx}: {e}")
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id,
+                    f"✅ Repetición desactivada para {exitos} recordatorios.")
+            del conversaciones[chat_id]
+            return ""
+
+        elif texto == "batch_cambiar_intervalo":
+            # Solo aplica a los que ya tienen repetir=True
+            con_repeticion = [i for i in seleccionados if lista[i].get("repetir")]
+            if not con_repeticion:
+                if msg_id:
+                    editar_mensaje_texto(chat_id, msg_id,
+                        "⚠️ Ninguno de los seleccionados tiene repetición activada.\n"
+                        "Primero activa la repetición con 'Cambiar repetición'.")
+                del conversaciones[chat_id]
+                return ""
+            datos["batch_con_repeticion"] = con_repeticion
+            conversaciones[chat_id]["estado"] = ESTADO_BATCH_INTERVALO
+            conversaciones[chat_id]["datos"]["batch_tipo_intervalo"] = "cambiar_intervalo"
+            conversaciones[chat_id]["wait_callback"] = False
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id,
+                    f"Escribe el nuevo intervalo para {len(con_repeticion)} recordatorios:\n\n"
+                    "Formato: número + unidad\n"
+                    "Ejemplo: 2h (2 horas), 1d (1 día), 30x (30 min)\n"
+                    "Unidades: s=seg, x=min, h=hrs, d=días, w=sem, m=mes, a=año")
+            return ""
+
+        elif texto == "batch_volver":
+            # Volver a la pantalla de selección
+            conversaciones[chat_id]["estado"] = ESTADO_BATCH_SELECT
+            conversaciones[chat_id]["wait_callback"] = True
+            _mostrar_batch_select(chat_id, datos.get("batch_pagina", 0), msg_id)
+            return ""
+
+        elif texto == "cancelar":
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id, "Edición cancelada.")
+            del conversaciones[chat_id]
+            return ""
+
+        return ""
+
+    # — FLUJO BATCH: INTERVALO DE REPETICIÓN —
+    if estado_actual == ESTADO_BATCH_INTERVALO:
+        datos = conversaciones[chat_id]["datos"]
+        seleccionados = datos["batch_seleccionados"]
+        lista = datos["batch_lista"]
+        tipo_op = datos.get("batch_tipo_intervalo", "activar_repeticion")
+
+        resultado = _parsear_intervalo_raw(texto)
+        if not resultado:
+            enviar_telegram(chat_id, tipo="texto",
+                mensaje="❌ Formato incorrecto. Escribe el intervalo (ej: 2h, 1d, 30x)\n"
+                        "Unidades: s=seg, x=min, h=hrs, d=días, w=sem, m=mes, a=año",
+                func_guardado_data=guardar_info_mensaje_enviado)
+            return ""
+
+        num, simbolo = resultado
+        sim_map = {"s": "seg", "x": "min", "h": "hrs", "d": "días", "w": "sem", "m": "mes", "a": "año"}
+
+        if tipo_op == "activar_repeticion":
+            # Activar repetición + asignar intervalo a todos los seleccionados
+            exitos = 0
+            for idx in seleccionados:
+                try:
+                    rec = lista[idx]
+                    actualizar_campos_recordatorio(rec["id"], {
+                        "repetir": True,
+                        "intervalo_repeticion": simbolo,
+                        "intervalos": num
+                    })
+                    exitos += 1
+                except Exception as e:
+                    print(f"[WARN] Error activando repetición batch {idx}: {e}")
+            enviar_telegram(chat_id, tipo="texto",
+                mensaje=f"✅ Repetición activada para {exitos} recordatorios.\n"
+                        f"Intervalo: cada {num} {sim_map.get(simbolo, simbolo)}",
+                func_guardado_data=guardar_info_mensaje_enviado)
+        else:
+            # Cambiar intervalo solo a los que ya tienen repetición
+            indices = datos.get("batch_con_repeticion", list(seleccionados))
+            exitos = 0
+            for idx in indices:
+                try:
+                    rec = lista[idx]
+                    actualizar_campos_recordatorio(rec["id"], {
+                        "intervalo_repeticion": simbolo,
+                        "intervalos": num
+                    })
+                    exitos += 1
+                except Exception as e:
+                    print(f"[WARN] Error cambiando intervalo batch {idx}: {e}")
+            enviar_telegram(chat_id, tipo="texto",
+                mensaje=f"✅ Intervalo cambiado para {exitos} recordatorios.\n"
+                        f"Nuevo intervalo: cada {num} {sim_map.get(simbolo, simbolo)}",
+                func_guardado_data=guardar_info_mensaje_enviado)
+
+        del conversaciones[chat_id]
+        return ""
+
+     # — FLUJO DE SELECCIÓN PARA EDICIÓN (legacy: por número de texto) —
     if estado_actual == ESTADO_EDITAR_SELECCION:
         # esperamos un número
         try:
