@@ -61,38 +61,59 @@ def backup_tabla(supabase_client, conn, tabla):
 
         cursor = conn.cursor()
 
-        # 2. Truncate tabla de backup
+        # 2. Obtener columnas que EXISTEN en la tabla de backup
+        cursor.execute("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = %s AND table_schema = 'public'
+        """, (tabla,))
+        columnas_backup = {row[0] for row in cursor.fetchall()}
+
+        # 3. Filtrar: solo columnas que existen en AMBOS lados
+        columnas_supabase = set(datos[0].keys())
+        columnas = sorted(columnas_supabase & columnas_backup)
+        
+        if not columnas:
+            logger.warning(f"Backup [{tabla}]: Sin columnas en común entre Supabase y backup")
+            return 0
+
+        # 4. Truncate tabla de backup
         cursor.execute(f"TRUNCATE TABLE {tabla} CASCADE")
 
-        # 3. Insertar todos los registros
-        columnas = list(datos[0].keys())
+        # 5. Insertar registros con savepoint por fila
         placeholders = ", ".join(["%s"] * len(columnas))
         cols = ", ".join(f'"{c}"' for c in columnas)
         insert_sql = f'INSERT INTO {tabla} ({cols}) VALUES ({placeholders})'
-
+        
+        insertados = 0
         for fila in datos:
             valores = tuple(fila.get(c) for c in columnas)
             try:
+                cursor.execute("SAVEPOINT fila_save")
                 cursor.execute(insert_sql, valores)
+                cursor.execute("RELEASE SAVEPOINT fila_save")
+                insertados += 1
             except Exception as e:
+                cursor.execute("ROLLBACK TO SAVEPOINT fila_save")
                 logger.warning(f"Backup [{tabla}]: Error insertando fila {fila.get('id', '?')}: {e}")
-                continue
 
-        # 4. Actualizar metadatos de backup
+        # 6. Actualizar metadatos de backup
         cursor.execute("""
             INSERT INTO _backup_metadata (tabla, registros_copiados, ultimo_backup)
             VALUES (%s, %s, %s)
             ON CONFLICT (tabla) DO UPDATE 
             SET registros_copiados = EXCLUDED.registros_copiados,
                 ultimo_backup = EXCLUDED.ultimo_backup
-        """, (tabla, len(datos), datetime.utcnow()))
+        """, (tabla, insertados, datetime.utcnow()))
 
         conn.commit()
-        return len(datos)
+        return insertados
 
     except Exception as e:
         logger.error(f"Backup [{tabla}]: Error general: {e}")
-        conn.rollback()
+        try:
+            conn.rollback()
+        except:
+            pass
         return -1
 
 

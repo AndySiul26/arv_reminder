@@ -42,9 +42,9 @@ CREATE TABLE IF NOT EXISTS reportes (
     id SERIAL PRIMARY KEY,
     chat_id TEXT NOT NULL,
     usuario TEXT,
-    tipo TEXT,
     descripcion TEXT,
-    fecha TIMESTAMPTZ DEFAULT NOW()
+    fecha_hora TIMESTAMPTZ DEFAULT NOW(),
+    estado TEXT DEFAULT 'pendiente'
 );
 
 CREATE TABLE IF NOT EXISTS actualizaciones_info (
@@ -55,9 +55,8 @@ CREATE TABLE IF NOT EXISTS actualizaciones_info (
 );
 
 CREATE TABLE IF NOT EXISTS chats_avisados_actualizaciones (
-    id SERIAL PRIMARY KEY,
-    chat_id TEXT UNIQUE NOT NULL,
-    ultima_actualizacion_id INTEGER DEFAULT 0
+    chat_id TEXT PRIMARY KEY,
+    id_ultima_actualizacion INTEGER
 );
 
 -- Tabla de metadatos de backup
