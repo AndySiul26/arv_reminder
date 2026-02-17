@@ -245,7 +245,7 @@ def _mostrar_lista_editar(chat_id, recordatorios):
         return ""
 
     conversaciones[chat_id]["datos"]["batch_lista"] = recordatorios
-    conversaciones[chat_id]["datos"]["batch_seleccionados"] = set()
+    conversaciones[chat_id]["datos"]["batch_seleccionados"] = []
     conversaciones[chat_id]["datos"]["batch_pagina"] = 0
     conversaciones[chat_id]["datos"]["lista_editar"] = recordatorios  # compatibilidad
     conversaciones[chat_id].update({"estado": ESTADO_BATCH_SELECT, "wait_callback": True})
@@ -618,9 +618,9 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                 idx = int(texto.split(":")[1])
                 seleccionados = datos["batch_seleccionados"]
                 if idx in seleccionados:
-                    seleccionados.discard(idx)
+                    seleccionados.remove(idx)
                 else:
-                    seleccionados.add(idx)
+                    seleccionados.append(idx)
                 _mostrar_batch_select(chat_id, datos["batch_pagina"], msg_id)
             except:
                 pass
@@ -647,7 +647,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
             if len(seleccionados) == 1:
                 # Un solo recordatorio: redirigir al flujo de edición individual
-                idx = list(seleccionados)[0]
+                idx = seleccionados[0]
                 rec = datos["batch_lista"][idx]
                 conversaciones[chat_id]["datos"].update({
                     "record_id": rec["id"],
