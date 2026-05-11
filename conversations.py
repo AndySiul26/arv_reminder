@@ -1,7 +1,7 @@
 import threading
 # ... el resto de tus importaciones mod detener avisos
 from datetime import datetime, timedelta
-from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid
+from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid, eliminar_mensaje
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
@@ -627,9 +627,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             return ""
         elif texto == "cancelar":
             if msg_id:
-                editar_mensaje_texto(chat_id, msg_id, "✅ Lista cerrada.")
-            else:
-                enviar_telegram(chat_id, tipo="texto", mensaje="✅ Lista cerrada.")
+                eliminar_mensaje(chat_id, msg_id)
             del conversaciones[chat_id]
             return ""
         return ""
