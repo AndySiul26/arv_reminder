@@ -208,7 +208,7 @@ def set_webhook_local_with_ngrok():
         return False
 
 def set_webhook_remoto():
-    webhook_url= os.getenv("WEB_HOOK_URL_REMOTE")
+    webhook_url= os.getenv("WEBHOOK_URL")
     if webhook_utils.set_webhook(webhook_url):
         print("Servidor remoto corriendo y url webhook establecida...")
         return True

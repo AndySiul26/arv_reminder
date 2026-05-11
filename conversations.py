@@ -24,6 +24,10 @@ ESTADO_BATCH_SELECT          = "batch_select"
 ESTADO_BATCH_ACCION          = "batch_accion"
 ESTADO_BATCH_INTERVALO       = "batch_intervalo"
 BATCH_POR_PAGINA = 4  # Recordatorios por página en selección batch
+
+# — ESTADOS VER LISTA (paginación) —
+ESTADO_VER_LISTA             = "ver_lista"
+VER_POR_PAGINA               = 4
 # Estados de conversación
 ESTADO_INICIAL = "inicial"
 ESTADO_NOMBRE_TAREA = "nombre_tarea"
@@ -399,97 +403,124 @@ def guardar_datos(chat_id, nuevas_conversaciones = None, guardar_zona_horaria = 
 
 def mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes:bool):
     global conversaciones
-    recordatorios=None
-    data=None
     try:
-        # LECTURA DIRECTA DE SUPABASE (fuente única de verdad)
+        # LECTURA DIRECTA DE SUPABASE
         recordatorios = supabase_db.obtener_recordatorios_usuario(chat_id=chat_id)
-        datos_msg = enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Revisando tus recordatorios...", formato="markdown").json()
-        data = datos_msg.get("result", None)
-        mensaje = ""
-    except Exception as e:
-        err_msg= f"Error al obtener recordatorios para mostrar lista al usuario ({chat_id})... Errores: " + str(e)
-        # Informar al admin
-        enviar_telegram(chat_id=tester_chat_id,tipo="texto", mensaje=err_msg)
-        print(err_msg)
-
-    if recordatorios:
+        
         if solo_pendientes:
-            pendientes = [r for r in recordatorios if not r.get("notificado", False)]
-            listado = pendientes
-            mensaje = f"*{nombre_usuario}, tus pendientes son:*\n\n" if listado else f"*{nombre_usuario}, no tienes recordatorios pendientes.*"
+            listado = [r for r in recordatorios if not r.get("notificado", False)]
         else:
             listado = recordatorios
-            mensaje = f"*{nombre_usuario}, todos tus recordatorios ({len(listado)}):*\n\n" if listado else f"*{nombre_usuario}, no tienes recordatorios.*"
+            
+        if not listado:
+            msg = f"*{nombre_usuario}, no tienes recordatorios pendientes.*" if solo_pendientes else f"*{nombre_usuario}, no tienes recordatorios registrados aún.*"
+            enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=msg, formato="markdown", func_guardado_data=guardar_info_mensaje_enviado)
+            return ""
 
+        # Inicializamos el estado para la paginación
+        conversaciones[chat_id]["datos"]["lista_ver"] = listado
+        conversaciones[chat_id]["datos"]["lista_ver_solo_pendientes"] = solo_pendientes
+        conversaciones[chat_id]["datos"]["lista_ver_pagina"] = 0
+        conversaciones[chat_id].update({"estado": ESTADO_VER_LISTA, "wait_callback": True})
+        
+        return _mostrar_lista_paginada(chat_id, pagina=0)
+
+    except Exception as e:
+        err_msg = f"Error al obtener recordatorios para mostrar lista al usuario ({chat_id}): {e}"
+        print(err_msg)
+        enviar_telegram(chat_id=chat_id, tipo="texto", mensaje="Ocurrió un error al cargar los recordatorios. Intenta de nuevo más tarde.")
+        return ""
+
+def significado_tiempo(simbolo, plural):
+    mapa = {
+        "s": "segundos" if plural else "segundo",
+        "x": "minutos" if plural else "minuto",
+        "h": "horas" if plural else "hora",
+        "d": "días" if plural else "día",
+        "w": "semanas" if plural else "semana",
+        "m": "meses" if plural else "mes",
+        "a": "años" if plural else "año",
+    }
+    return mapa.get(simbolo, "desconocido")
+
+def _mostrar_lista_paginada(chat_id, pagina=0, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    lista = datos.get("lista_ver", [])
+    solo_pendientes = datos.get("lista_ver_solo_pendientes", True)
+    zona_horaria = datos.get("zona_horaria", None)
+    usuario = datos.get("usuario", "Usuario")
+
+    total = len(lista)
+    total_paginas = max(1, (total + VER_POR_PAGINA - 1) // VER_POR_PAGINA)
+    pagina = max(0, min(pagina, total_paginas - 1))
+    datos["lista_ver_pagina"] = pagina
+
+    inicio = pagina * VER_POR_PAGINA
+    fin = min(inicio + VER_POR_PAGINA, total)
+    
+    tipo_lista = "pendientes" if solo_pendientes else "recordatorios"
+    mensaje = f"*{usuario}, tus {tipo_lista} (Página {pagina+1}/{total_paginas}):*\n\n"
+    
+    for r in lista[inicio:fin]:
         try:
-            zona_horaria = conversaciones.get(chat_id, {}).get("datos", {}).get("zona_horaria", None)
+            fecha_hora_recordatorio = datetime.strptime(r["fecha_hora"], "%Y-%m-%dT%H:%M:%S")
+        except (ValueError, TypeError):
+            try:
+                fecha_hora_recordatorio = datetime.fromisoformat(r["fecha_hora"])
+            except Exception:
+                fecha_hora_recordatorio = None
 
-            for r in listado:
-                # Formato ISO esperado: '2025-06-06T09:06:00'
-                try:
-                    fecha_hora_recordatorio = datetime.strptime(r["fecha_hora"], "%Y-%m-%dT%H:%M:%S")
-                except (ValueError, TypeError):
-                    try:
-                        fecha_hora_recordatorio = datetime.fromisoformat(r["fecha_hora"])
-                    except Exception:
-                        fecha_hora_recordatorio = None
-
-                if fecha_hora_recordatorio and zona_horaria:
-                    fecha_hora_local = utilidades.convertir_fecha_utc_a_local(fecha_utc=fecha_hora_recordatorio, zona_horaria=zona_horaria)
-                elif fecha_hora_recordatorio:
-                    fecha_hora_local = fecha_hora_recordatorio
-                else:
-                    fecha_hora_local = None
-
-                # Escapar caracteres especiales de Markdown en campos de usuario
-                nombre_tarea_safe = str(r.get('nombre_tarea', '')).replace('*', '').replace('_', ' ').replace('`', '')
-                descripcion_safe = str(r.get('descripcion', '')).replace('*', '').replace('_', ' ').replace('`', '')
-
-                bloque = f"• *{nombre_tarea_safe}*: {descripcion_safe}\n"
-                if fecha_hora_local:
-                    bloque += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
-                bloque += f"  🔁 Repetible: {'Sí' if r.get('repetir') else 'No'}\n"
-                if r.get('repetir'):
-                    bloque += f"  ⌚ Intervalo: Cada {r.get('intervalos', 0)} {significado_tiempo(r.get('intervalo_repeticion', ''), (int(r.get('intervalos', 0)) > 1))}\n"
-                bloque += f"  🔔 Aviso constante: {'Sí' if r.get('aviso_constante') else 'No'}\n\n"
-                
-                mensaje += bloque
-                
-        except Exception as e:
-            print(f"Error al mostrar los recordatorios del usuario {chat_id}:", str(e))
-            texto_error = "Error al mostrar los recordatorios, error informado al administrador. Disculpe las molestias."
-            if data:
-                editar_mensaje_texto(chat_id=chat_id, message_id=data["message_id"], nuevo_texto=texto_error, formato="markdown")
-            else:
-                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=texto_error, formato="markdown")
-            return "" # Finalizar ejecución si hubo error
-
-        # Enviar resultado — dividir si excede el límite de Telegram (4096 chars)
-        LIMITE_TELEGRAM = 4000  # Margen de seguridad
-        if data:
-            # Editar el primer mensaje con el inicio del contenido
-            primer_trozo = mensaje[:LIMITE_TELEGRAM]
-            editar_mensaje_texto(chat_id=chat_id, message_id=data["message_id"], nuevo_texto=primer_trozo, formato="markdown")
-            # Si hay más contenido, enviarlo en mensajes adicionales
-            resto = mensaje[LIMITE_TELEGRAM:]
-            while resto:
-                trozo = resto[:LIMITE_TELEGRAM]
-                resto = resto[LIMITE_TELEGRAM:]
-                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=trozo, formato="markdown")
+        if fecha_hora_recordatorio and zona_horaria:
+            fecha_hora_local = utilidades.convertir_fecha_utc_a_local(fecha_utc=fecha_hora_recordatorio, zona_horaria=zona_horaria)
+        elif fecha_hora_recordatorio:
+            fecha_hora_local = fecha_hora_recordatorio
         else:
-            # Sin message_id, enviar todo en trozos
-            while mensaje:
-                trozo = mensaje[:LIMITE_TELEGRAM]
-                mensaje = mensaje[LIMITE_TELEGRAM:]
-                enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=trozo, formato="markdown")
+            fecha_hora_local = None
 
+        nombre_tarea_safe = str(r.get('nombre_tarea', '')).replace('*', '').replace('_', ' ').replace('`', '')
+        descripcion_safe = str(r.get('descripcion', '')).replace('*', '').replace('_', ' ').replace('`', '')
+
+        bloque = f"• *{nombre_tarea_safe}*: {descripcion_safe}\n"
+        if fecha_hora_local:
+            bloque += f"  📅 {fecha_hora_local.strftime('%d/%m/%Y a las %H:%M')}\n"
+        
+        repetir = r.get('repetir', False)
+        bloque += f"  🔁 Repetible: {'Sí' if repetir else 'No'}\n"
+        if repetir:
+            intervalo_val = int(r.get('intervalos', 0))
+            simbolo = r.get('intervalo_repeticion', '')
+            bloque += f"  ⌚ Intervalo: Cada {intervalo_val} {significado_tiempo(simbolo, intervalo_val > 1)}\n"
+            
+        bloque += f"  🔔 Aviso constante: {'Sí' if r.get('aviso_constante') else 'No'}\n\n"
+        mensaje += bloque
+
+    # Fila de botones
+    filas = []
+    if total_paginas > 1:
+        nav = []
+        if pagina > 0:
+            nav.append({"texto": "« Anterior", "data": f"ver_pg:{pagina-1}"})
+        nav.append({"texto": f"{pagina+1}/{total_paginas}", "data": "ver_pg_noop"})
+        if pagina < total_paginas - 1:
+            nav.append({"texto": "Siguiente »", "data": f"ver_pg:{pagina+1}"})
+        filas.append(nav)
+    
+    filas.append([{"texto": "❌ Cerrar", "data": "cancelar"}])
+
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, mensaje, filas, formato="Markdown")
     else:
-        mensaje = f"{nombre_usuario}, no tienes recordatorios registrados aún."
-        if data:
-            editar_mensaje_texto(chat_id=chat_id, message_id=data["message_id"], nuevo_texto=mensaje, formato="markdown")
-        else:
-            enviar_telegram(chat_id=chat_id, tipo="texto", mensaje=mensaje, formato="markdown")
+        ret = enviar_mensaje_con_grid(chat_id, mensaje, filas, formato="Markdown")
+        if ret and ret.status_code == 200:
+            try:
+                data = ret.json()
+                mid = data.get("result", {}).get("message_id")
+                if mid:
+                    conversaciones[chat_id]["datos"]["last_id_message"] = mid
+                    conversaciones[chat_id]["id_callback"] = mid
+            except:
+                pass
+    return ""
 
 def comprobacion_asignacion_fecha_hora(chat_id, raw):
     texto = raw.lower()
@@ -578,6 +609,30 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     # — FLUJO DE REPORTE —
     if estado_actual == ESTADO_REPORTAR:
         return procesar_reporte(chat_id, texto, nombre_usuario)
+
+    # — FLUJO VER LISTA (PAGINACIÓN DE RECORDATORIOS) —
+    if estado_actual == ESTADO_VER_LISTA:
+        datos = conversaciones[chat_id]["datos"]
+        msg_id = datos.get("last_id_message") or conversaciones[chat_id].get("id_callback")
+        
+        if texto.startswith("ver_pg:"):
+            try:
+                pagina = int(texto.split(":")[1])
+                datos["lista_ver_pagina"] = pagina
+                _mostrar_lista_paginada(chat_id, pagina, msg_id)
+            except:
+                pass
+            return ""
+        elif texto == "ver_pg_noop":
+            return ""
+        elif texto == "cancelar":
+            if msg_id:
+                editar_mensaje_texto(chat_id, msg_id, "✅ Lista cerrada.")
+            else:
+                enviar_telegram(chat_id, tipo="texto", mensaje="✅ Lista cerrada.")
+            del conversaciones[chat_id]
+            return ""
+        return ""
 
 
      # — FLUJO INICIAL DE EDICIÓN: Filtro pendientes/todos —
