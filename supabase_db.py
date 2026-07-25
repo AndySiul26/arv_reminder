@@ -8,6 +8,7 @@ from services import enviar_telegram
 import socket
 import time
 import logging
+import threading
 from functools import wraps
 
 logger = logging.getLogger("supabase_db")
@@ -48,6 +49,24 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Inicializar cliente de Supabase
 supabase: Client = None
+_clientes_supabase_por_hilo = threading.local()
+
+
+def _obtener_cliente_supabase_por_hilo():
+    """
+    Devuelve un cliente independiente por hilo.
+
+    Gunicorn atiende webhooks en varios hilos y el administrador de recordatorios
+    trabaja en segundo plano. Compartir una única sesión HTTP entre todos puede
+    corromper el estado de una solicitud concurrente.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    cliente = getattr(_clientes_supabase_por_hilo, "cliente", None)
+    if cliente is None:
+        cliente = create_client(SUPABASE_URL, SUPABASE_KEY)
+        _clientes_supabase_por_hilo.cliente = cliente
+    return cliente
 
 def inicializar_supabase():
     """Inicializa la conexión con Supabase"""
@@ -444,12 +463,11 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
 @con_reintentos(max_reintentos=2)
 def obtener_recordatorios_usuario(chat_id):
     """Obtiene todos los recordatorios de un usuario específico"""
-    if not supabase:
-        if not inicializar_supabase():
-            return []
-    
     try:
-        response = supabase.table("recordatorios").select("*").eq("chat_id", str(chat_id)).order("fecha_hora", desc=False).execute()
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return []
+        response = cliente.table("recordatorios").select("*").eq("chat_id", str(chat_id)).order("fecha_hora", desc=False).execute()
         
         return response.data
     
@@ -511,15 +529,14 @@ def eliminar_recordatorio_por_id(recordatorio_id):
 
 def upsert_chat_info(chat_id: str, nombre: str, tipo: str, zona_horaria: str = None):
     """Inserta un nuevo chat o actualiza zona_horaria si ya existe"""
-    if not supabase:
-        if not inicializar_supabase():
-            return []
-        
     creado_en = datetime.now().isoformat()
 
     try:
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return False
         # Buscar si ya existe
-        consulta = supabase.table("chats_info").select("*").eq("chat_id", chat_id).execute()
+        consulta = cliente.table("chats_info").select("*").eq("chat_id", chat_id).execute()
         
         if not consulta.data:
             # No existe: insertar nuevo registro
@@ -531,12 +548,12 @@ def upsert_chat_info(chat_id: str, nombre: str, tipo: str, zona_horaria: str = N
                 "creado_en": creado_en
                 
             }
-            response = supabase.table("chats_info").insert(data).execute()
+            response = cliente.table("chats_info").insert(data).execute()
             print("✅ Nuevo chat registrado:", response)
         else:
             # Ya existe: actualizar zona_horaria si es necesario
             if zona_horaria:
-                response = supabase.table("chats_info").update({"zona_horaria": zona_horaria}).eq("chat_id", chat_id).execute()
+                response = cliente.table("chats_info").update({"zona_horaria": zona_horaria}).eq("chat_id", chat_id).execute()
                 print("🔄 Zona horaria actualizada:", response)
             else:
                 print("⚠️ Ya existe el chat_id y no se proporcionó una nueva zona horaria.")
@@ -849,12 +866,11 @@ def leer_modo_tester()->bool:
     Retorna:
     - El valor booleano del modo tester si existe, de lo contrario None.
     """
-    if not supabase:
-        if not inicializar_supabase():
-            return False
-
     try:
-        datos = supabase.from_("modo_tester").select("modo_tester").execute()
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return False
+        datos = cliente.from_("modo_tester").select("modo_tester").execute()
         if datos.data:            
             return datos.data[0]['modo_tester']
         else:
@@ -886,12 +902,11 @@ def leer_estados_chat_id(chat_id):
     """
     Lee todos los estados (estado_1 a estado_5) asociados a un chat_id desde la tabla 'chats_id_estados'.
     """
-    if not supabase:
-        if not inicializar_supabase():
-            return None
-
     try:
-        response = supabase.table("chats_id_estados") \
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return None
+        response = cliente.table("chats_id_estados") \
             .select("*") \
             .eq("chat_id", str(chat_id)) \
             .execute()
@@ -917,13 +932,12 @@ def leer_estado_chat_id(chat_id, numero_estado):
     Retorna:
     - El valor del estado si existe, o None si no hay registro.
     """
-    if not supabase:
-        if not inicializar_supabase():
-            return None
-
     try:
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return None
         campo_estado = f"estado_{numero_estado}"
-        response = supabase.table("chats_id_estados") \
+        response = cliente.table("chats_id_estados") \
             .select(campo_estado) \
             .eq("chat_id", str(chat_id)) \
             .execute()
@@ -949,18 +963,17 @@ def actualizar_estado_chat_id(chat_id, numero_estado, nuevo_valor):
     - numero_estado: número entre 1 y 5 indicando qué estado modificar.
     - nuevo_valor: nuevo valor para asignar al estado.
     """
-    if not supabase:
-        if not inicializar_supabase():
-            return False
-
     try:
+        cliente = _obtener_cliente_supabase_por_hilo()
+        if not cliente:
+            return False
         campo_estado = f"estado_{numero_estado}"
         datos_actualizados = {
             "chat_id": str(chat_id),
             campo_estado: str(nuevo_valor)
         }
 
-        response = supabase.table("chats_id_estados") \
+        response = cliente.table("chats_id_estados") \
             .upsert(datos_actualizados, on_conflict="chat_id") \
             .execute()
 

@@ -152,6 +152,60 @@ class UnifiedManagerTests(unittest.TestCase):
             )
         )
 
+    @patch("conversations.enviar_mensaje_con_grid")
+    @patch("conversations.inicializar_conversaciones")
+    def test_search_prompt_saves_the_message_that_will_be_replaced(
+        self,
+        init_conversation,
+        send_grid,
+    ):
+        conversations.conversaciones["42"] = {
+            "estado": "",
+            "datos": {"zona_horaria": "UTC"},
+            "recordatorios_aviso_constante": {},
+        }
+        init_conversation.return_value = conversations.conversaciones
+        send_grid.return_value = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 501}},
+        )
+
+        conversations.iniciar_gestor_recordatorios(
+            "42", "Andy", iniciar_busqueda=True
+        )
+
+        self.assertEqual(
+            conversations.conversaciones["42"]["datos"]["gestor_message_id"],
+            501,
+        )
+
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations.supabase_db.obtener_recordatorios_usuario")
+    def test_search_shows_progress_before_replacing_it_with_results(
+        self,
+        get_records,
+        edit_grid,
+    ):
+        conversations.conversaciones["42"] = {
+            "estado": conversations.ESTADO_GESTOR_BUSQUEDA,
+            "datos": {
+                "zona_horaria": "UTC",
+                "gestor_message_id": 501,
+                "gestor_filtro": "todos",
+            },
+            "recordatorios_aviso_constante": {},
+        }
+        edit_grid.return_value = Mock(status_code=200)
+        get_records.return_value = []
+
+        conversations._ejecutar_busqueda_gestor("42", "agua")
+
+        self.assertEqual(edit_grid.call_count, 2)
+        self.assertIn("Buscando...", edit_grid.call_args_list[0].args[2])
+        self.assertIn("Resultados: 0", edit_grid.call_args_list[1].args[2])
+        self.assertEqual(edit_grid.call_args_list[0].args[1], 501)
+        self.assertEqual(edit_grid.call_args_list[1].args[1], 501)
+
 
 class SnoozeTests(unittest.TestCase):
     def tearDown(self):

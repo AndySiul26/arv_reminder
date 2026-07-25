@@ -634,6 +634,40 @@ def _guardar_message_id_gestor(chat_id, respuesta):
             pass
 
 
+def _mostrar_busqueda_en_progreso(chat_id, busqueda, message_id=None):
+    """Muestra una confirmación inmediata mientras se consulta Supabase."""
+    datos = conversaciones[chat_id]["datos"]
+    consulta = _truncar(busqueda.strip(), 80)
+    mensaje = f'🔎 Buscando...\n\nConsulta: "{consulta}"'
+    message_id = (
+        message_id
+        or datos.get("gestor_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+
+    if message_id:
+        respuesta = editar_mensaje_con_grid(chat_id, message_id, mensaje, [])
+        if respuesta and respuesta.status_code == 200:
+            return message_id
+
+    respuesta = enviar_mensaje_con_grid(chat_id, mensaje, [])
+    _guardar_message_id_gestor(chat_id, respuesta)
+    return datos.get("gestor_message_id")
+
+
+def _ejecutar_busqueda_gestor(chat_id, busqueda):
+    """Informa que la búsqueda inició y reemplaza el aviso con los resultados."""
+    busqueda = busqueda.strip()
+    message_id = _mostrar_busqueda_en_progreso(chat_id, busqueda)
+    return _cargar_lista_gestor(
+        chat_id,
+        filtro="todos",
+        busqueda=busqueda,
+        pagina=0,
+        message_id=message_id,
+    )
+
+
 def _cargar_lista_gestor(
     chat_id, filtro=None, busqueda=None, pagina=0, message_id=None
 ):
@@ -747,7 +781,8 @@ def _pedir_busqueda_gestor(chat_id, message_id=None):
     if message_id:
         editar_mensaje_con_grid(chat_id, message_id, prompt, [])
     else:
-        enviar_telegram(chat_id, tipo="texto", mensaje=prompt)
+        respuesta = enviar_mensaje_con_grid(chat_id, prompt, [])
+        _guardar_message_id_gestor(chat_id, respuesta)
     return ""
 
 
@@ -1006,10 +1041,18 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         )
     if texto.lower() in ["/recordatorios", "recordatorios"]:
         return iniciar_gestor_recordatorios(chat_id, nombre_usuario, filtro="todos")
-    if texto.lower() in ["/buscar", "buscar"]:
+    texto_normalizado = texto.strip()
+    texto_minusculas = texto_normalizado.lower()
+    if texto_minusculas in ["/buscar", "buscar"]:
         return iniciar_gestor_recordatorios(
             chat_id, nombre_usuario, iniciar_busqueda=True
         )
+    if texto_minusculas.startswith("/buscar ") or texto_minusculas.startswith("buscar "):
+        busqueda = texto_normalizado.split(maxsplit=1)[1].strip()
+        iniciar_gestor_recordatorios(
+            chat_id, nombre_usuario, iniciar_busqueda=True
+        )
+        return _ejecutar_busqueda_gestor(chat_id, busqueda)
     if texto.lower() in ["/reportar", "reportar"]:
         return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
@@ -1087,14 +1130,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
     # — GESTOR UNIFICADO: BÚSQUEDA —
     if estado_actual == ESTADO_GESTOR_BUSQUEDA:
-        message_id = conversaciones[chat_id]["datos"].get("gestor_message_id")
-        return _cargar_lista_gestor(
-            chat_id,
-            filtro="todos",
-            busqueda=texto.strip(),
-            pagina=0,
-            message_id=message_id,
-        )
+        return _ejecutar_busqueda_gestor(chat_id, texto)
 
     # — GESTOR UNIFICADO: LISTA —
     if estado_actual == ESTADO_GESTOR_LISTA:
