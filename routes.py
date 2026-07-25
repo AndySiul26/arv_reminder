@@ -81,7 +81,8 @@ def manejar_mensaje(data):
             mensaje=mostrar_ayuda(nombre),
             botones=[
                 {"texto": "🆕 Nuevo Recordatorio", "data": "nuevo_recordatorio"},
-                {"texto": "📋 Ver Pendientes",    "data": "ver_pendientes"}
+                {"texto": "📋 Gestionar Recordatorios", "data": "gestor_recordatorios"},
+                {"texto": "🔎 Buscar Recordatorios", "data": "buscar_recordatorios"}
             ]
         )
     elif text.startswith("/ayuda"):

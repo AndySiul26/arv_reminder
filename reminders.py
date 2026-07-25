@@ -22,7 +22,7 @@ from gestionar_actualizaciones import (
     obtener_ultima_actualizacion
 )
 
-from services import enviar_telegram
+from services import enviar_telegram, enviar_mensaje_con_grid
 import conversations  # Para pedir zona y actualizar recordatorios
 
 
@@ -161,17 +161,32 @@ class AdministradorRecordatorios:
             mensaje += f"📋 *Descripción:* {recordatorio['descripcion']}\n"
             mensaje += fecha_hora_str
 
-            # Enviar
+            # Enviar con opciones de aplazamiento para avisos normales y constantes.
+            recordatorio_id = recordatorio["id"]
+            filas_aplazamiento = [
+                [
+                    {"texto": "⏳ 5 min", "data": f"snooze:{recordatorio_id}:5"},
+                    {"texto": "⏳ 10 min", "data": f"snooze:{recordatorio_id}:10"},
+                ],
+                [
+                    {"texto": "⏳ 20 min", "data": f"snooze:{recordatorio_id}:20"},
+                    {
+                        "texto": "🕒 Personalizado",
+                        "data": f"snooze_custom:{recordatorio_id}",
+                    },
+                ],
+            ]
             if aviso_constante:
-                ret = enviar_telegram(
-                    chat_id=chat_id,
-                    tipo="botones",
-                    mensaje=mensaje,
-                    botones=[{"texto": "Detener", "data": "parar"}],
-                    formato="Markdown"
-                )
-            else:
-                ret = enviar_telegram(chat_id, tipo="texto", mensaje=mensaje, formato="Markdown")
+                filas_aplazamiento.append([
+                    {"texto": "🛑 Detener avisos", "data": "parar"}
+                ])
+
+            ret = enviar_mensaje_con_grid(
+                chat_id,
+                mensaje,
+                filas_aplazamiento,
+                formato="Markdown",
+            )
 
             # RECORDATORIOS DE AVISO CONSTANTE, SE EDITARAN ESOS MENSAJES CUANDO SE DETENGAN 
             try:

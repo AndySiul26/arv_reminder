@@ -117,7 +117,9 @@ def enviar_mensaje_con_botones(chat_id, mensaje, botones, formato=None):
         payload["parse_mode"] = formato
     return requests.post(url, json=payload)
 
-def enviar_mensaje_con_grid(chat_id, mensaje, filas_botones, formato=None):
+def enviar_mensaje_con_grid(
+    chat_id, mensaje, filas_botones, formato=None, counter_recursivity=0
+):
     """Envía un mensaje con botones organizados en filas personalizadas (grid).
     
     filas_botones: lista de listas de botones.
@@ -134,9 +136,25 @@ def enviar_mensaje_con_grid(chat_id, mensaje, filas_botones, formato=None):
     payload = {"chat_id": chat_id, "text": mensaje, "reply_markup": keyboard}
     if formato:
         payload["parse_mode"] = formato
-    return requests.post(url, json=payload)
+    ret = requests.post(url, json=payload)
+    if ret.status_code != 200 and formato and counter_recursivity < 2:
+        return enviar_mensaje_con_grid(
+            chat_id,
+            mensaje,
+            filas_botones,
+            formato=None,
+            counter_recursivity=counter_recursivity + 1,
+        )
+    return ret
 
-def editar_mensaje_con_grid(chat_id, message_id, mensaje, filas_botones, formato=None):
+def editar_mensaje_con_grid(
+    chat_id,
+    message_id,
+    mensaje,
+    filas_botones,
+    formato=None,
+    counter_recursivity=0,
+):
     """Edita texto + botones grid de un mensaje existente."""
     url = f"{BASE_URL}/editMessageText"
     keyboard = {
@@ -153,7 +171,17 @@ def editar_mensaje_con_grid(chat_id, message_id, mensaje, filas_botones, formato
     }
     if formato:
         payload["parse_mode"] = formato
-    return requests.post(url, json=payload)
+    ret = requests.post(url, json=payload)
+    if ret.status_code != 200 and formato and counter_recursivity < 2:
+        return editar_mensaje_con_grid(
+            chat_id,
+            message_id,
+            mensaje,
+            filas_botones,
+            formato=None,
+            counter_recursivity=counter_recursivity + 1,
+        )
+    return ret
 
 def enviar_documento(chat_id, ruta, caption="", formato=None):
     url = f"{BASE_URL}/sendDocument"
