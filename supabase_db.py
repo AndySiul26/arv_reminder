@@ -216,6 +216,61 @@ def obtener_recordatorios_por_ids(lista_ids):
         print(f"Error al obtener recordatorios por IDs desde Supabase: {e}")
         return None
 
+
+@con_reintentos(max_reintentos=3)
+def obtener_recordatorio_por_id_y_chat(recordatorio_id, chat_id):
+    """Obtiene un recordatorio únicamente si pertenece al chat indicado."""
+    if not supabase:
+        if not inicializar_supabase():
+            return None
+
+    try:
+        response = (
+            supabase
+            .table("recordatorios")
+            .select("*")
+            .eq("id", int(recordatorio_id))
+            .eq("chat_id", str(chat_id))
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"Error al obtener recordatorio {recordatorio_id} para {chat_id}: {e}")
+        return None
+
+
+@con_reintentos(max_reintentos=3)
+def aplazar_recordatorio(recordatorio_id, chat_id, nueva_fecha_hora):
+    """
+    Reprograma una ocurrencia y la deja lista para volver a notificarse.
+
+    No modifica ``repeticion_creada``: si la siguiente ocurrencia de una serie ya
+    fue creada, conservar esa marca evita duplicarla al vencer el aplazamiento.
+    """
+    if not supabase:
+        if not inicializar_supabase():
+            return None
+
+    try:
+        response = (
+            supabase
+            .table("recordatorios")
+            .update({
+                "fecha_hora": nueva_fecha_hora,
+                "notificado": False,
+                "aviso_detenido": False,
+            })
+            .eq("id", int(recordatorio_id))
+            .eq("chat_id", str(chat_id))
+            .execute()
+        )
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"Error al aplazar recordatorio {recordatorio_id} para {chat_id}: {e}")
+        notificar_error_base_datos(e, chat_id)
+        return None
+
 def obtener_todos_los_ids_recordatorios():
     """Retorna una lista con TODOS los IDs de recordatorios en Supabase."""
     if not supabase:

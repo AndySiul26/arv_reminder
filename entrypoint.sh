@@ -45,6 +45,14 @@ else
     echo "" # New line
 fi
 
+# 3.1 Keep Telegram's visible command menu aligned with the unified v4 flow.
+echo "📋 Configuring Telegram command menu..."
+curl -sS -X POST \
+     -H "Content-Type: application/json" \
+     -d '{"commands":[{"command":"recordatorio","description":"Registrar un nuevo recordatorio"},{"command":"recordatorios","description":"Buscar, consultar y editar recordatorios"},{"command":"buscar","description":"Buscar por nombre, descripción o ID"},{"command":"reportar","description":"Reportar un problema"},{"command":"ayuda","description":"Mostrar ayuda"}]}' \
+     "https://api.telegram.org/bot$TELEGRAM_TOKEN/setMyCommands"
+echo ""
+
 # 4. Start Gunicorn with SSL
 # Bind to 0.0.0.0:8443 (Telegram-supported port)
 echo "🌟 Starting Gunicorn Server on port 8443 (HTTPS)..."

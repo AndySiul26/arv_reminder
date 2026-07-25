@@ -1,6 +1,7 @@
 import threading
+import re
 # ... el resto de tus importaciones mod detener avisos
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid, eliminar_mensaje
 import supabase_db
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
@@ -28,6 +29,13 @@ BATCH_POR_PAGINA = 4  # Recordatorios por página en selección batch
 # — ESTADOS VER LISTA (paginación) —
 ESTADO_VER_LISTA             = "ver_lista"
 VER_POR_PAGINA               = 4
+# — ESTADOS GESTOR UNIFICADO —
+ESTADO_GESTOR_MENU           = "gestor_menu"
+ESTADO_GESTOR_LISTA          = "gestor_lista"
+ESTADO_GESTOR_BUSQUEDA       = "gestor_busqueda"
+ESTADO_GESTOR_DETALLE        = "gestor_detalle"
+# — ESTADO APLAZAMIENTO —
+ESTADO_APLAZAR_PERSONALIZADO = "aplazar_personalizado"
 # Estados de conversación
 ESTADO_INICIAL = "inicial"
 ESTADO_NOMBRE_TAREA = "nombre_tarea"
@@ -240,7 +248,7 @@ def iniciar_edicion(chat_id, nombre_usuario):
         botones=botones, func_guardado_data=guardar_info_mensaje_enviado)
     return ""
 
-def _mostrar_lista_editar(chat_id, recordatorios):
+def _mostrar_lista_editar(chat_id, recordatorios, message_id=None):
     """Inicia el grid de selección batch de recordatorios."""
     if not recordatorios:
         enviar_telegram(chat_id, tipo="texto",
@@ -254,7 +262,7 @@ def _mostrar_lista_editar(chat_id, recordatorios):
     conversaciones[chat_id]["datos"]["lista_editar"] = recordatorios  # compatibilidad
     conversaciones[chat_id].update({"estado": ESTADO_BATCH_SELECT, "wait_callback": True})
 
-    return _mostrar_batch_select(chat_id, pagina=0)
+    return _mostrar_batch_select(chat_id, pagina=0, message_id=message_id)
 
 
 def _mostrar_batch_select(chat_id, pagina=0, message_id=None):
@@ -362,6 +370,424 @@ def _parsear_intervalo_raw(texto):
                     return int(num), char
                 break
     return None
+
+
+def _parsear_duracion_aplazamiento(texto):
+    """
+    Convierte una duración amigable a minutos.
+
+    Acepta un número solo (minutos) o unidades como ``min``, ``hora`` y
+    ``día``. El límite de 30 días evita aplazamientos accidentales extremos.
+    """
+    if texto is None:
+        return None
+
+    normalizado = (
+        str(texto).strip().lower()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+    )
+    coincidencia = re.fullmatch(r"(\d+)\s*([a-z]*)", normalizado)
+    if not coincidencia:
+        return None
+
+    cantidad = int(coincidencia.group(1))
+    unidad = coincidencia.group(2)
+    if cantidad <= 0:
+        return None
+
+    if unidad in ("", "m", "min", "mins", "minuto", "minutos"):
+        minutos = cantidad
+    elif unidad in ("h", "hr", "hrs", "hora", "horas"):
+        minutos = cantidad * 60
+    elif unidad in ("d", "dia", "dias"):
+        minutos = cantidad * 24 * 60
+    else:
+        return None
+
+    return minutos if minutos <= 30 * 24 * 60 else None
+
+
+def _filtrar_recordatorios(recordatorios, filtro="todos", busqueda=""):
+    """Filtra recordatorios por estado y por texto sin consultar la red."""
+    resultado = list(recordatorios or [])
+
+    if filtro == "pendientes":
+        resultado = [r for r in resultado if not r.get("notificado", False)]
+
+    termino = str(busqueda or "").strip().casefold()
+    if termino:
+        resultado = [
+            r for r in resultado
+            if termino in " ".join([
+                str(r.get("id", "")),
+                str(r.get("nombre_tarea", "")),
+                str(r.get("descripcion", "")),
+                str(r.get("usuario", "")),
+            ]).casefold()
+        ]
+
+    return resultado
+
+
+def _fecha_recordatorio_local(recordatorio, zona_horaria=""):
+    """Devuelve la fecha del recordatorio en la zona del usuario si es posible."""
+    fecha_raw = recordatorio.get("fecha_hora")
+    if not fecha_raw:
+        return None
+    try:
+        fecha = datetime.fromisoformat(str(fecha_raw).replace("Z", "+00:00"))
+        if zona_horaria:
+            return utilidades.convertir_fecha_utc_a_local(fecha, zona_horaria)
+        return fecha
+    except Exception:
+        return None
+
+
+def _texto_detalle_recordatorio(recordatorio, zona_horaria=""):
+    """Genera una ficha legible y sin Markdown para consulta previa a la edición."""
+    fecha = _fecha_recordatorio_local(recordatorio, zona_horaria)
+    fecha_txt = fecha.strftime("%d/%m/%Y a las %H:%M") if fecha else "Sin fecha válida"
+    repetir = bool(recordatorio.get("repetir", False))
+    constante = bool(recordatorio.get("aviso_constante", False))
+    notificado = bool(recordatorio.get("notificado", False))
+    detenido = bool(recordatorio.get("aviso_detenido", False))
+
+    lineas = [
+        f"Recordatorio #{recordatorio.get('id', '—')}",
+        "",
+        f"Tarea: {recordatorio.get('nombre_tarea') or 'Sin nombre'}",
+        f"Descripción: {recordatorio.get('descripcion') or 'Sin descripción'}",
+        f"Fecha: {fecha_txt}",
+        f"Estado: {'Notificado' if notificado else 'Pendiente'}",
+        f"Repetible: {'Sí' if repetir else 'No'}",
+    ]
+
+    if repetir:
+        cantidad = int(recordatorio.get("intervalos") or 0)
+        simbolo = recordatorio.get("intervalo_repeticion", "")
+        lineas.append(
+            f"Intervalo: cada {cantidad} {significado_tiempo(simbolo, cantidad != 1)}"
+        )
+
+    lineas.extend([
+        f"Aviso constante: {'Sí' if constante else 'No'}",
+        f"Aviso detenido: {'Sí' if detenido else 'No'}",
+    ])
+    return "\n".join(lineas)
+
+
+def _quitar_aviso_constante_guardado(chat_id, recordatorio_id):
+    """Retira del estado persistido el mensaje constante que acaba de aplazarse."""
+    try:
+        guardados_raw = supabase_db.leer_estado_chat_id(
+            chat_id, CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE
+        )
+        guardados = json.loads(guardados_raw) if guardados_raw else {}
+        guardados.pop(str(recordatorio_id), None)
+        supabase_db.actualizar_estado_chat_id(
+            chat_id,
+            CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE,
+            json.dumps(guardados),
+        )
+        if chat_id in conversaciones:
+            conversaciones[chat_id]["recordatorios_aviso_constante"] = guardados
+    except Exception as e:
+        print(f"No se pudo limpiar el aviso constante aplazado: {e}")
+
+
+def aplazar_recordatorio_chat(chat_id, recordatorio_id, minutos, message_id=None):
+    """Aplaza un recordatorio que pertenece al chat y actualiza el mensaje."""
+    recordatorio = supabase_db.obtener_recordatorio_por_id_y_chat(
+        recordatorio_id, chat_id
+    )
+    if not recordatorio:
+        enviar_telegram(
+            chat_id,
+            tipo="texto",
+            mensaje="No pude encontrar ese recordatorio o ya no está disponible.",
+        )
+        return ""
+
+    nueva_fecha = datetime.now(timezone.utc) + timedelta(minutes=int(minutos))
+    actualizado = supabase_db.aplazar_recordatorio(
+        recordatorio_id,
+        chat_id,
+        nueva_fecha.isoformat(),
+    )
+    if not actualizado:
+        enviar_telegram(
+            chat_id,
+            tipo="texto",
+            mensaje="No pude aplazar el recordatorio. Intenta nuevamente.",
+        )
+        return ""
+
+    info_chat = supabase_db.obtener_info_chat(chat_id) or {}
+    zona_horaria = info_chat.get("zona_horaria") or "UTC"
+    nueva_fecha_local = utilidades.convertir_fecha_utc_a_local(
+        nueva_fecha, zona_horaria
+    )
+    confirmacion = (
+        "⏰ Recordatorio aplazado\n\n"
+        f"{recordatorio.get('nombre_tarea') or 'Recordatorio'}\n"
+        f"Nueva hora: {nueva_fecha_local.strftime('%d/%m/%Y a las %H:%M')}"
+    )
+
+    if recordatorio.get("aviso_constante"):
+        _quitar_aviso_constante_guardado(chat_id, recordatorio_id)
+
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, confirmacion, [])
+    else:
+        enviar_telegram(chat_id, tipo="texto", mensaje=confirmacion)
+
+    if chat_id in conversaciones and (
+        conversaciones[chat_id].get("estado") == ESTADO_APLAZAR_PERSONALIZADO
+    ):
+        guardar_estado(chat_id, "")
+        conversaciones.pop(chat_id, None)
+    return ""
+
+
+def iniciar_aplazamiento_personalizado(
+    chat_id, recordatorio_id, nombre_usuario, tipo="private", message_id=None
+):
+    """Solicita una duración personalizada y persiste el estado del flujo."""
+    supabase_db.upsert_chat_info(chat_id, nombre_usuario, tipo)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    conversaciones[chat_id]["datos"].update({
+        "aplazar_recordatorio_id": int(recordatorio_id),
+        "aplazar_message_id": message_id,
+    })
+    guardar_estado(chat_id, ESTADO_APLAZAR_PERSONALIZADO)
+    prompt = (
+        "¿Cuánto deseas aplazarlo?\n\n"
+        "Escribe una duración de hasta 30 días.\n"
+        "Ejemplos: 45 minutos, 2 horas, 1 día."
+    )
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, prompt, [])
+    else:
+        enviar_telegram(chat_id, tipo="texto", mensaje=prompt)
+    return ""
+
+
+def iniciar_gestor_recordatorios(
+    chat_id, nombre_usuario, filtro=None, iniciar_busqueda=False, message_id=None
+):
+    """Abre el flujo único para buscar, consultar y editar recordatorios."""
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    if message_id is None:
+        # Un comando nuevo debe crear su propia pantalla y no intentar editar un
+        # mensaje antiguo restaurado desde el estado persistido.
+        conversaciones[chat_id]["datos"].pop("gestor_message_id", None)
+        conversaciones[chat_id]["id_callback"] = None
+    conversaciones[chat_id]["datos"].update({
+        "usuario": nombre_usuario,
+        "gestor_filtro": filtro or "todos",
+        "gestor_busqueda": "",
+        "gestor_pagina": 0,
+    })
+    if message_id is not None:
+        conversaciones[chat_id]["datos"]["gestor_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+
+    if iniciar_busqueda:
+        return _pedir_busqueda_gestor(chat_id, message_id)
+    if filtro:
+        return _cargar_lista_gestor(chat_id, filtro=filtro, message_id=message_id)
+    return _mostrar_menu_gestor(chat_id, message_id=message_id)
+
+
+def _mostrar_menu_gestor(chat_id, message_id=None):
+    conversaciones[chat_id]["estado"] = ESTADO_GESTOR_MENU
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [
+            {"texto": "📌 Pendientes", "data": "gestor_filtro:pendientes"},
+            {"texto": "📋 Todos", "data": "gestor_filtro:todos"},
+        ],
+        [{"texto": "🔎 Buscar", "data": "gestor_buscar"}],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ]
+    mensaje = "Recordatorios\n\nElige qué deseas consultar:"
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, mensaje, filas)
+    else:
+        respuesta = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+        _guardar_message_id_gestor(chat_id, respuesta)
+    return ""
+
+
+def _guardar_message_id_gestor(chat_id, respuesta):
+    if respuesta and respuesta.status_code == 200:
+        try:
+            message_id = respuesta.json().get("result", {}).get("message_id")
+            if message_id:
+                conversaciones[chat_id]["datos"]["gestor_message_id"] = message_id
+                conversaciones[chat_id]["id_callback"] = message_id
+        except Exception:
+            pass
+
+
+def _cargar_lista_gestor(
+    chat_id, filtro=None, busqueda=None, pagina=0, message_id=None
+):
+    datos = conversaciones[chat_id]["datos"]
+    filtro = filtro or datos.get("gestor_filtro", "todos")
+    if busqueda is None:
+        busqueda = datos.get("gestor_busqueda", "")
+
+    todos = supabase_db.obtener_recordatorios_usuario(chat_id)
+    lista = _filtrar_recordatorios(todos, filtro=filtro, busqueda=busqueda)
+    datos.update({
+        "gestor_lista": lista,
+        "gestor_filtro": filtro,
+        "gestor_busqueda": busqueda,
+        "gestor_pagina": pagina,
+    })
+    return _mostrar_lista_gestor(chat_id, pagina=pagina, message_id=message_id)
+
+
+def _mostrar_lista_gestor(chat_id, pagina=0, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    lista = datos.get("gestor_lista", [])
+    filtro = datos.get("gestor_filtro", "todos")
+    busqueda = datos.get("gestor_busqueda", "")
+    zona = datos.get("zona_horaria", "")
+    total = len(lista)
+    total_paginas = max(1, (total + VER_POR_PAGINA - 1) // VER_POR_PAGINA)
+    pagina = max(0, min(pagina, total_paginas - 1))
+    datos["gestor_pagina"] = pagina
+    conversaciones[chat_id]["estado"] = ESTADO_GESTOR_LISTA
+    conversaciones[chat_id]["wait_callback"] = True
+
+    inicio = pagina * VER_POR_PAGINA
+    fin = min(inicio + VER_POR_PAGINA, total)
+    filas = []
+    for indice in range(inicio, fin):
+        recordatorio = lista[indice]
+        fecha = _fecha_recordatorio_local(recordatorio, zona)
+        fecha_txt = fecha.strftime("%d/%m %H:%M") if fecha else "sin fecha"
+        estado = "✅" if recordatorio.get("notificado") else "⏳"
+        filas.append([{
+            "texto": (
+                f"{estado} {indice + 1}. "
+                f"{_truncar(recordatorio.get('nombre_tarea', 'Sin nombre'), 24)}"
+                f" · {fecha_txt}"
+            ),
+            "data": f"gestor_detalle:{indice}",
+        }])
+
+    if total_paginas > 1:
+        navegacion = []
+        if pagina > 0:
+            navegacion.append({
+                "texto": "« Anterior", "data": f"gestor_pg:{pagina - 1}"
+            })
+        navegacion.append({
+            "texto": f"{pagina + 1}/{total_paginas}", "data": "gestor_noop"
+        })
+        if pagina < total_paginas - 1:
+            navegacion.append({
+                "texto": "Siguiente »", "data": f"gestor_pg:{pagina + 1}"
+            })
+        filas.append(navegacion)
+
+    filas.extend([
+        [
+            {"texto": "🔎 Buscar", "data": "gestor_buscar"},
+            {"texto": "☑️ Selección múltiple", "data": "gestor_batch"},
+        ],
+        [
+            {"texto": "📌 Pendientes", "data": "gestor_filtro:pendientes"},
+            {"texto": "📋 Todos", "data": "gestor_filtro:todos"},
+        ],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ])
+
+    alcance = "pendientes" if filtro == "pendientes" else "todos"
+    encabezado = f"Recordatorios: {alcance}"
+    if busqueda:
+        encabezado += f'\nBúsqueda: "{busqueda}"'
+    mensaje = f"{encabezado}\n\nResultados: {total}"
+    if not total:
+        mensaje += "\nNo se encontraron coincidencias."
+
+    message_id = (
+        message_id
+        or datos.get("gestor_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, mensaje, filas)
+    else:
+        respuesta = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+        _guardar_message_id_gestor(chat_id, respuesta)
+    return ""
+
+
+def _pedir_busqueda_gestor(chat_id, message_id=None):
+    conversaciones[chat_id]["estado"] = ESTADO_GESTOR_BUSQUEDA
+    conversaciones[chat_id]["wait_callback"] = False
+    prompt = (
+        "🔎 Buscar recordatorios\n\n"
+        "Escribe parte del nombre, la descripción o el ID del recordatorio.\n"
+        "Envía /cancelar para salir."
+    )
+    message_id = (
+        message_id
+        or conversaciones[chat_id]["datos"].get("gestor_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, prompt, [])
+    else:
+        enviar_telegram(chat_id, tipo="texto", mensaje=prompt)
+    return ""
+
+
+def _mostrar_detalle_gestor(chat_id, indice, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    lista = datos.get("gestor_lista", [])
+    if indice < 0 or indice >= len(lista):
+        return _mostrar_lista_gestor(
+            chat_id,
+            datos.get("gestor_pagina", 0),
+            message_id,
+        )
+
+    recordatorio = lista[indice]
+    datos.update({
+        "gestor_indice": indice,
+        "record_id": recordatorio["id"],
+        "record_data": recordatorio,
+    })
+    conversaciones[chat_id]["estado"] = ESTADO_GESTOR_DETALLE
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [{"texto": "✏️ Editar", "data": "gestor_editar"}],
+        [{"texto": "⬅️ Volver a resultados", "data": "gestor_volver"}],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ]
+    mensaje = _texto_detalle_recordatorio(
+        recordatorio, datos.get("zona_horaria", "")
+    )
+    message_id = (
+        message_id
+        or datos.get("gestor_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        editar_mensaje_con_grid(chat_id, message_id, mensaje, filas)
+    else:
+        respuesta = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+        _guardar_message_id_gestor(chat_id, respuesta)
+    return ""
 
 def guardar_info_mensaje_enviado(chat_id, info, nuevas_conversaciones=None):
     global conversaciones
@@ -571,16 +997,38 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     # Si no hay conversación activa, chequeamos comandos globales
 
     if texto.lower() in ["/editar", "editar"]:
-        return iniciar_edicion(chat_id, nombre_usuario)
+        return iniciar_gestor_recordatorios(chat_id, nombre_usuario)
     if texto.lower() in ["/recordatorio", "recordatorio"]:
         return iniciar_recordatorio(chat_id, nombre_usuario)
     if texto.lower() in ["/pendientes", "pendiente"]:
-        return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=True)
+        return iniciar_gestor_recordatorios(
+            chat_id, nombre_usuario, filtro="pendientes"
+        )
     if texto.lower() in ["/recordatorios", "recordatorios"]:
-        return mostrar_recordatorios(chat_id, nombre_usuario, solo_pendientes=False)
+        return iniciar_gestor_recordatorios(chat_id, nombre_usuario, filtro="todos")
+    if texto.lower() in ["/buscar", "buscar"]:
+        return iniciar_gestor_recordatorios(
+            chat_id, nombre_usuario, iniciar_busqueda=True
+        )
     if texto.lower() in ["/reportar", "reportar"]:
         return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
+        if conversaciones[chat_id].get("estado") in [
+            ESTADO_GESTOR_MENU,
+            ESTADO_GESTOR_LISTA,
+            ESTADO_GESTOR_BUSQUEDA,
+            ESTADO_GESTOR_DETALLE,
+        ]:
+            message_id = (
+                id_callback
+                or conversaciones[chat_id]["datos"].get("gestor_message_id")
+                or conversaciones[chat_id].get("id_callback")
+            )
+            if message_id:
+                eliminar_mensaje(chat_id, message_id)
+            guardar_estado(chat_id, "")
+            conversaciones.pop(chat_id, None)
+            return ""
         if "editar" in conversaciones[chat_id].get("estado",""):
             msg = "La edición del recordatorio ha sido cancelada"
         elif conversaciones[chat_id].get("creacion_recordatorio", False):
@@ -605,6 +1053,116 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
     
     # Procesar según el estado actual de la conversación
     estado_actual = conversaciones[chat_id]["estado"]
+
+    # — FLUJO DE APLAZAMIENTO PERSONALIZADO —
+    if estado_actual == ESTADO_APLAZAR_PERSONALIZADO:
+        minutos = _parsear_duracion_aplazamiento(texto)
+        if not minutos:
+            return (
+                "No entendí la duración. Escribe, por ejemplo: "
+                "45 minutos, 2 horas o 1 día (máximo 30 días)."
+            )
+        datos = conversaciones[chat_id]["datos"]
+        return aplazar_recordatorio_chat(
+            chat_id,
+            datos["aplazar_recordatorio_id"],
+            minutos,
+            datos.get("aplazar_message_id"),
+        )
+
+    # — GESTOR UNIFICADO: MENÚ —
+    if estado_actual == ESTADO_GESTOR_MENU:
+        message_id = (
+            id_callback
+            or conversaciones[chat_id]["datos"].get("gestor_message_id")
+        )
+        if texto.startswith("gestor_filtro:"):
+            filtro = texto.split(":", 1)[1]
+            return _cargar_lista_gestor(
+                chat_id, filtro=filtro, busqueda="", message_id=message_id
+            )
+        if texto == "gestor_buscar":
+            return _pedir_busqueda_gestor(chat_id, message_id)
+        return ""
+
+    # — GESTOR UNIFICADO: BÚSQUEDA —
+    if estado_actual == ESTADO_GESTOR_BUSQUEDA:
+        message_id = conversaciones[chat_id]["datos"].get("gestor_message_id")
+        return _cargar_lista_gestor(
+            chat_id,
+            filtro="todos",
+            busqueda=texto.strip(),
+            pagina=0,
+            message_id=message_id,
+        )
+
+    # — GESTOR UNIFICADO: LISTA —
+    if estado_actual == ESTADO_GESTOR_LISTA:
+        datos = conversaciones[chat_id]["datos"]
+        message_id = (
+            id_callback
+            or datos.get("gestor_message_id")
+            or conversaciones[chat_id].get("id_callback")
+        )
+        if texto.startswith("gestor_detalle:"):
+            try:
+                indice = int(texto.split(":", 1)[1])
+                return _mostrar_detalle_gestor(chat_id, indice, message_id)
+            except ValueError:
+                return ""
+        if texto.startswith("gestor_pg:"):
+            try:
+                pagina = int(texto.split(":", 1)[1])
+                return _mostrar_lista_gestor(chat_id, pagina, message_id)
+            except ValueError:
+                return ""
+        if texto == "gestor_noop":
+            return ""
+        if texto == "gestor_buscar":
+            return _pedir_busqueda_gestor(chat_id, message_id)
+        if texto == "gestor_batch":
+            return _mostrar_lista_editar(
+                chat_id,
+                datos.get("gestor_lista", []),
+                message_id=message_id,
+            )
+        if texto.startswith("gestor_filtro:"):
+            filtro = texto.split(":", 1)[1]
+            return _cargar_lista_gestor(
+                chat_id, filtro=filtro, busqueda="", message_id=message_id
+            )
+        if texto == "gestor_menu":
+            return _mostrar_menu_gestor(chat_id, message_id)
+        return ""
+
+    # — GESTOR UNIFICADO: DETALLE —
+    if estado_actual == ESTADO_GESTOR_DETALLE:
+        datos = conversaciones[chat_id]["datos"]
+        message_id = (
+            id_callback
+            or datos.get("gestor_message_id")
+            or conversaciones[chat_id].get("id_callback")
+        )
+        if texto == "gestor_editar":
+            recordatorio = datos.get("record_data", {})
+            guardar_estado(chat_id, ESTADO_EDITAR_CAMPO)
+            conversaciones[chat_id]["wait_callback"] = True
+            botones = _generar_botones_edicion(
+                recordatorio, datos.get("zona_horaria", "")
+            )
+            editar_mensaje_con_botones(
+                chat_id,
+                message_id,
+                f"Editando: {_truncar(recordatorio.get('nombre_tarea', 'Sin nombre'), 30)}\n"
+                "¿Qué campo deseas editar?",
+                botones,
+            )
+            return ""
+        if texto == "gestor_volver":
+            return _mostrar_lista_gestor(
+                chat_id, datos.get("gestor_pagina", 0), message_id
+            )
+        return ""
 
     # — FLUJO DE REPORTE —
     if estado_actual == ESTADO_REPORTAR:
@@ -1505,11 +2063,11 @@ def mostrar_ayuda(nombre_usuario):
     mensaje = f"¡Hola {nombre_usuario}! Soy ARV Reminder y te puedo ayudar a recordar tus tareas.\n\n"
     mensaje += "Puedes usar los siguientes comandos:\n"
     mensaje += "• /recordatorio - Crear un nuevo recordatorio\n"
-    mensaje += "• /editar - Editar un recordatorio\n"
-    mensaje += "• /pendientes - Ver tus recordatorios pendientes\n"
-    mensaje += "• /recordatorios - Ver todos tus recordatorios registrados\n"
+    mensaje += "• /recordatorios - Buscar, consultar y editar tus recordatorios\n"
+    mensaje += "• /buscar - Buscar por nombre, descripción o ID\n"
     mensaje += "• /reportar - Reportar un problema o incidencia\n"
     mensaje += "• /ayuda - Mostrar este mensaje de ayuda\n\n"
+    mensaje += "También puedes aplazar un aviso 5, 10, 20 minutos o elegir un tiempo personalizado.\n\n"
     mensaje += "Para comenzar, escribe /recordatorio"
     
     return mensaje
@@ -1607,17 +2165,63 @@ def detener_avisos(chat_id):
 
 def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback):
     """Procesa los callbacks de los botones inline"""
-    
+    supabase_db.upsert_chat_info(
+        chat_id=chat_id, nombre=nombre_usuario, tipo=tipo
+    )
+
+    # Los botones de aplazamiento deben funcionar aunque el usuario tenga otro
+    # flujo conversacional abierto.
+    if callback_data.startswith("snooze:"):
+        try:
+            _, recordatorio_id, minutos = callback_data.split(":", 2)
+            return aplazar_recordatorio_chat(
+                chat_id,
+                int(recordatorio_id),
+                int(minutos),
+                id_callback,
+            )
+        except (TypeError, ValueError):
+            return "No pude interpretar el aplazamiento solicitado."
+
+    if callback_data.startswith("snooze_custom:"):
+        try:
+            recordatorio_id = int(callback_data.split(":", 1)[1])
+            return iniciar_aplazamiento_personalizado(
+                chat_id,
+                recordatorio_id,
+                nombre_usuario,
+                tipo=tipo,
+                message_id=id_callback,
+            )
+        except (TypeError, ValueError):
+            return "No pude identificar el recordatorio que deseas aplazar."
+
     if chat_id in conversaciones:
         if conversaciones[chat_id].get("wait_callback", False):
             conversaciones[chat_id]["wait_callback"]=False
             return procesar_mensaje(chat_id=chat_id, texto=callback_data, nombre_usuario=nombre_usuario, es_callback=True,tipo=tipo, id_callback= id_callback)
         
     if callback_data == "nuevo_recordatorio":
+        inicializar_conversaciones(chat_id, nombre_usuario)
         return iniciar_recordatorio(chat_id, nombre_usuario)
     elif callback_data == "ver_pendientes":
-        # Aquí implementarás la lógica para mostrar recordatorios pendientes
-        return "Esta función estará disponible próximamente."
+        return iniciar_gestor_recordatorios(
+            chat_id,
+            nombre_usuario,
+            filtro="pendientes",
+            message_id=id_callback,
+        )
+    elif callback_data == "gestor_recordatorios":
+        return iniciar_gestor_recordatorios(
+            chat_id, nombre_usuario, message_id=id_callback
+        )
+    elif callback_data == "buscar_recordatorios":
+        return iniciar_gestor_recordatorios(
+            chat_id,
+            nombre_usuario,
+            iniciar_busqueda=True,
+            message_id=id_callback,
+        )
     elif callback_data == "cancelar":
         if chat_id in conversaciones:
             del conversaciones[chat_id]
