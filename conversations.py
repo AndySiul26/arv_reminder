@@ -276,6 +276,8 @@ def _mostrar_batch_select(chat_id, pagina=0, message_id=None):
     total_paginas = max(1, (total + BATCH_POR_PAGINA - 1) // BATCH_POR_PAGINA)
     pagina = max(0, min(pagina, total_paginas - 1))
     datos["batch_pagina"] = pagina
+    conversaciones[chat_id]["estado"] = ESTADO_BATCH_SELECT
+    conversaciones[chat_id]["wait_callback"] = True
 
     inicio = pagina * BATCH_POR_PAGINA
     fin = min(inicio + BATCH_POR_PAGINA, total)
@@ -318,19 +320,31 @@ def _mostrar_batch_select(chat_id, pagina=0, message_id=None):
     msg = f"Selecciona los recordatorios que deseas editar:\n(Página {pagina+1} de {total_paginas} · {total} recordatorios)"
 
     if message_id:
+        datos["batch_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
         ret = editar_mensaje_con_grid(chat_id, message_id, msg, filas)
+        if not ret or ret.status_code != 200:
+            detalle = getattr(ret, "text", "sin respuesta")
+            print(
+                f"[ERROR] No se pudo actualizar selección batch para "
+                f"{chat_id}: {detalle}"
+            )
+            ret = enviar_mensaje_con_grid(chat_id, msg, filas)
     else:
         ret = enviar_mensaje_con_grid(chat_id, msg, filas)
-        # Guardar message_id para futuras actualizaciones
-        if ret and ret.status_code == 200:
-            try:
-                data = ret.json()
-                mid = data.get("result", {}).get("message_id")
-                if mid:
-                    datos["batch_message_id"] = mid
-                    conversaciones[chat_id]["id_callback"] = mid
-            except:
-                pass
+
+    # Guardar message_id para futuras actualizaciones o para el fallback.
+    if ret and ret.status_code == 200:
+        try:
+            mid = ret.json().get("result", {}).get("message_id")
+            if mid:
+                datos["batch_message_id"] = mid
+                conversaciones[chat_id]["id_callback"] = mid
+        except (AttributeError, TypeError, ValueError) as e:
+            print(f"[WARN] Respuesta batch sin message_id válido: {e}")
+    elif not message_id:
+        detalle = getattr(ret, "text", "sin respuesta")
+        print(f"[ERROR] No se pudo mostrar selección batch para {chat_id}: {detalle}")
     return ""
 
 
@@ -1264,27 +1278,34 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             try:
                 idx = int(texto.split(":")[1])
                 seleccionados = datos["batch_seleccionados"]
+                if idx < 0 or idx >= len(datos["batch_lista"]):
+                    raise IndexError(f"Índice fuera de rango: {idx}")
                 if idx in seleccionados:
                     seleccionados.remove(idx)
                 else:
                     seleccionados.append(idx)
-                _mostrar_batch_select(chat_id, datos["batch_pagina"], msg_id)
-            except:
-                pass
-            return ""
+                return _mostrar_batch_select(
+                    chat_id, datos["batch_pagina"], msg_id
+                )
+            except (KeyError, TypeError, ValueError, IndexError) as e:
+                print(f"[ERROR] Selección batch inválida para {chat_id}: {e}")
+                conversaciones[chat_id]["wait_callback"] = True
+                return "No pude seleccionar ese recordatorio. Intenta nuevamente."
 
         elif texto.startswith("pg:"):
             # Paginación
             try:
                 pagina = int(texto.split(":")[1])
                 datos["batch_pagina"] = pagina
-                _mostrar_batch_select(chat_id, pagina, msg_id)
-            except:
-                pass
-            return ""
+                return _mostrar_batch_select(chat_id, pagina, msg_id)
+            except (KeyError, TypeError, ValueError, IndexError) as e:
+                print(f"[ERROR] Página batch inválida para {chat_id}: {e}")
+                conversaciones[chat_id]["wait_callback"] = True
+                return "No pude cambiar de página. Intenta nuevamente."
 
         elif texto == "pg_noop":
             # Botón de número de página — no hacer nada
+            conversaciones[chat_id]["wait_callback"] = True
             return ""
 
         elif texto == "batch_editar":

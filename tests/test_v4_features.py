@@ -207,6 +207,90 @@ class UnifiedManagerTests(unittest.TestCase):
         self.assertEqual(edit_grid.call_args_list[1].args[1], 501)
 
 
+class BatchSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.records = [
+            {
+                "id": index + 1,
+                "nombre_tarea": f"Recordatorio {index + 1}",
+                "fecha_hora": "2026-07-25T12:00:00+00:00",
+            }
+            for index in range(6)
+        ]
+        conversations.conversaciones["42"] = {
+            "estado": conversations.ESTADO_BATCH_SELECT,
+            "wait_callback": True,
+            "id_callback": 700,
+            "datos": {
+                "zona_horaria": "UTC",
+                "batch_lista": self.records,
+                "batch_seleccionados": [],
+                "batch_pagina": 0,
+                "batch_message_id": 700,
+            },
+            "recordatorios_aviso_constante": {},
+        }
+
+    def tearDown(self):
+        conversations.conversaciones.clear()
+
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    def test_individual_taps_accumulate_and_refresh_the_grid(
+        self,
+        upsert,
+        edit_grid,
+    ):
+        edit_grid.return_value = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 700}},
+        )
+
+        conversations.procesar_callback(
+            "42", "sel:1", "Andy", "private", 700
+        )
+        conversations.procesar_callback(
+            "42", "sel:3", "Andy", "private", 700
+        )
+
+        state = conversations.conversaciones["42"]
+        self.assertEqual(state["datos"]["batch_seleccionados"], [1, 3])
+        self.assertTrue(state["wait_callback"])
+        rows = edit_grid.call_args.args[3]
+        labels = [button["texto"] for row in rows for button in row]
+        data = [button["data"] for row in rows for button in row]
+        self.assertTrue(any("2." in label and "✅" in label for label in labels))
+        self.assertTrue(any("4." in label and "✅" in label for label in labels))
+        self.assertIn("batch_editar", data)
+        self.assertTrue(
+            any("Editar seleccionados (2)" in label for label in labels)
+        )
+
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    def test_pagination_keeps_previous_selections(
+        self,
+        upsert,
+        edit_grid,
+    ):
+        edit_grid.return_value = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 700}},
+        )
+
+        conversations.procesar_callback(
+            "42", "sel:1", "Andy", "private", 700
+        )
+        conversations.procesar_callback(
+            "42", "pg:1", "Andy", "private", 700
+        )
+
+        state = conversations.conversaciones["42"]
+        self.assertEqual(state["datos"]["batch_seleccionados"], [1])
+        self.assertEqual(state["datos"]["batch_pagina"], 1)
+        self.assertTrue(state["wait_callback"])
+
+
 class SnoozeTests(unittest.TestCase):
     def tearDown(self):
         conversations.conversaciones.clear()

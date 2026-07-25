@@ -11,6 +11,19 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+
+def responder_callback_query(callback_query_id, texto=None):
+    """Confirma inmediatamente a Telegram que se recibió la pulsación."""
+    payload = {"callback_query_id": callback_query_id}
+    if texto:
+        payload["text"] = texto
+    return requests.post(
+        f"{BASE_URL}/answerCallbackQuery",
+        json=payload,
+        timeout=10,
+    )
+
+
 def contiene_url(texto):
     """Detecta si el texto contiene una URL"""
     return bool(re.search(r"https?://\S+", texto or ""))

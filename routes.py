@@ -3,13 +3,15 @@
 import json, os
 from flask import Blueprint, request
 import threading
+from collections import defaultdict
 from supabase_db import leer_modo_tester
-from services import enviar_telegram
+from services import enviar_telegram, responder_callback_query
 from conversations import procesar_mensaje, procesar_callback, mostrar_ayuda
 from reminders import ping_otro_servidor
 
 routes = Blueprint('routes', __name__)
 TEST_USER_ID = os.environ.get("TELEGRAM_TEST_USER_ID")
+_callback_locks = defaultdict(threading.Lock)
 
 @routes.route("/")
 def index():
@@ -116,7 +118,21 @@ def manejar_callback(data):
     with open("debug_callback.json", "a", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False); f.write("\n")
 
-    resp = procesar_callback(chat_id, callback_data, nombre, tipo=tipo_chat, id_callback= message_id)
+    try:
+        responder_callback_query(cb["id"])
+    except Exception as e:
+        print(f"Error al confirmar callback {cb.get('id')}: {e}")
+
+    # Evita que varias pulsaciones rápidas modifiquen el mismo estado y mensaje
+    # al mismo tiempo. Chats distintos continúan procesándose en paralelo.
+    with _callback_locks[chat_id]:
+        resp = procesar_callback(
+            chat_id,
+            callback_data,
+            nombre,
+            tipo=tipo_chat,
+            id_callback=message_id,
+        )
     if resp:
         enviar_telegram(chat_id, tipo="texto", mensaje=resp)
 
