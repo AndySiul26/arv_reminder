@@ -8,6 +8,7 @@ Se debe ejecutar una sola vez para configurar la base de datos.
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -270,15 +271,32 @@ def crear_tablas_criptoalertas(supabase: Client):
             ON cripto_alertas (chat_id);
         CREATE INDEX IF NOT EXISTS idx_cripto_alertas_estado_book
             ON cripto_alertas (estado, book);
+
+        NOTIFY pgrst, 'reload schema';
         """
         supabase.rpc("exec_sql", {"sql": sql}).execute()
 
         admin_chat_id = os.getenv("TELEGRAM_TEST_USER_ID")
         if admin_chat_id:
-            supabase.table("cripto_premium_users").upsert(
-                {"chat_id": str(admin_chat_id), "activo": True},
-                on_conflict="chat_id",
-            ).execute()
+            last_error = None
+            for attempt in range(3):
+                try:
+                    supabase.table("cripto_premium_users").upsert(
+                        {"chat_id": str(admin_chat_id), "activo": True},
+                        on_conflict="chat_id",
+                    ).execute()
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        time.sleep(1)
+            if last_error:
+                # El administrador sigue autorizado por la variable de entorno.
+                print(
+                    "⚠️ Las tablas se crearon, pero el alta premium del "
+                    f"administrador quedó pendiente: {last_error}"
+                )
 
         print("✅ Tablas de criptoalertas creadas correctamente.")
         return True
