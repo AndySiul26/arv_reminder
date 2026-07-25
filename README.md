@@ -46,6 +46,9 @@ El bot permite:
   personalizada.
 - Buscar recordatorios por nombre, descripción o ID.
 - Consultar y editar desde una única lista interactiva.
+- Crear alertas premium cuando un mercado de Bitso alcance o rebase un precio.
+- Administrar, editar, reactivar y eliminar criptoalertas.
+- Consultar precios públicos de Bitso sin almacenar credenciales de trading.
 - Recibir reportes de problemas y avisar al administrador.
 - Distribuir notas de actualización a los usuarios.
 - Activar un modo tester/mantenimiento limitado a un chat autorizado.
@@ -64,6 +67,10 @@ flowchart LR
     C --> S["services.py"]
     S --> T
     C --> D["supabase_db.py"]
+    C --> CA["crypto_alerts.py"]
+    CA --> BA["API pública de Bitso"]
+    CA --> SB
+    CA --> S
     A["Administrador de recordatorios"] --> D
     A --> S
     D --> SB["Supabase / PostgreSQL principal"]
@@ -139,6 +146,8 @@ Las respuestas se envían directamente a la API HTTP de Telegram desde
 | `/recordatorio` | Inicia la creación de un recordatorio. |
 | `/recordatorios` | Abre el gestor para buscar, consultar y editar. |
 | `/buscar` | Busca por nombre, descripción o ID. |
+| `/criptoalerta` | Crea una alerta premium de precio basada en Bitso. |
+| `/criptoalertas` | Administra, edita, reactiva o elimina criptoalertas. |
 | `/pendientes` | Alias compatible que abre el gestor filtrado por pendientes. |
 | `/editar` | Alias compatible que abre el gestor principal. |
 | `/reportar` | Inicia el registro de una incidencia. |
@@ -300,6 +309,42 @@ La selección múltiple permite:
 La cuadrícula muestra cuatro elementos por página y permite mantener selecciones
 entre páginas. Las operaciones se aplican una fila a la vez en Supabase.
 
+### Criptoalertas Premium
+
+`/criptoalerta` solicita:
+
+1. Mercado público de Bitso, por ejemplo `BTC/MXN`.
+2. Condición `precio >= objetivo` o `precio <= objetivo`.
+3. Precio objetivo.
+
+La aplicación valida el mercado contra `available_books`, muestra el último
+precio negociado (`last`) y guarda una alerta de una sola ejecución. El monitor
+agrupa todas las alertas por mercado: aunque varios usuarios vigilen `btc_mxn`,
+solo se consulta una vez ese ticker por ciclo.
+
+Cuando la condición se cumple, Telegram recibe el mercado, condición, objetivo,
+precio detectado, hora reportada y fuente. La alerta cambia de `activa` a
+`disparada` únicamente si Telegram confirma el envío.
+
+`/criptoalertas` permite consultar, editar la condición, reactivar o eliminar
+alertas propias. Toda operación verifica simultáneamente el ID y el `chat_id`.
+
+El acceso se controla mediante `cripto_premium_users`. El chat configurado en
+`TELEGRAM_TEST_USER_ID` se habilita automáticamente durante el arranque para
+pruebas administrativas. La función es informativa: no consulta balances, no
+requiere claves de Bitso y no ejecuta compras ni ventas.
+
+Para habilitar un usuario desde el editor SQL de Supabase:
+
+```sql
+INSERT INTO cripto_premium_users (chat_id, activo)
+VALUES ('CHAT_ID', TRUE)
+ON CONFLICT (chat_id)
+DO UPDATE SET activo = TRUE, actualizado_en = NOW();
+```
+
+Para retirar el acceso sin borrar sus alertas, establecer `activo = FALSE`.
+
 ### Reportes
 
 `/reportar` solicita una descripción del problema. El reporte se guarda en la
@@ -335,6 +380,7 @@ El administrador usa la librería `schedule` dentro de un hilo daemon.
 | --- | --- |
 | Al arrancar | Corrige o solicita zonas horarias y revisa recordatorios vencidos. |
 | Cada 1 minuto | Consulta y envía recordatorios. |
+| Cada 1 minuto | Agrupa mercados activos, consulta Bitso y dispara criptoalertas. |
 | Cada 1 minuto, temporalmente | Reintenta solicitar zonas faltantes hasta completar la migración. |
 | Cada 5 minutos | Revisa y distribuye notas de actualización. |
 | Cada 30 minutos | Replica Supabase hacia PostgreSQL local. |
@@ -358,6 +404,8 @@ consulta, edición y envío.
 | `actualizaciones_info` | Historial de notas de actualización. |
 | `chats_avisados_actualizaciones` | Última actualización recibida por cada chat. |
 | `modo_tester` | Interruptor global del modo tester. |
+| `cripto_alertas` | Condición, mercado, objetivo y estado de cada alerta. |
+| `cripto_premium_users` | Usuarios autorizados para las funciones premium. |
 
 #### Campos principales de `recordatorios`
 
@@ -477,6 +525,9 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `BACKUP_PG_DB` | Docker la define | Base de datos del respaldo. |
 | `BACKUP_PG_USER` | Docker la define | Usuario del respaldo. |
 | `BACKUP_PG_PASS` | Muy recomendable | Contraseña del respaldo. |
+| `BITSO_API_BASE_URL` | No | API pública; por defecto `https://bitso.com/api/v3`. |
+| `BITSO_TIMEOUT_SECONDS` | No | Tiempo máximo de cada consulta; por defecto 10 segundos. |
+| `CRYPTO_ALERT_INTERVAL_SECONDS` | No | Frecuencia del monitor; mínimo y valor predeterminado: 60 segundos. |
 
 Hay una inconsistencia heredada: `webhook_utils.py` busca
 `TELEGRAM_BOT_TOKEN`, mientras el resto del sistema usa `TELEGRAM_TOKEN`.
@@ -615,6 +666,7 @@ heredada `TELEGRAM_BOT_TOKEN`.
 | `routes.py` | Endpoints HTTP y enrutamiento de mensajes/callbacks. |
 | `conversations.py` | Máquina de estados y lógica funcional del usuario. |
 | `reminders.py` | Scheduler, envíos vencidos, repeticiones y actualizaciones. |
+| `crypto_alerts.py` | API de Bitso, CRUD premium y monitor de condiciones. |
 | `supabase_db.py` | Acceso centralizado a Supabase y reintentos. |
 | `services.py` | Cliente HTTP de Telegram y edición de mensajes. |
 | `utilidades.py` | Fechas, zonas horarias, intervalos y ngrok. |

@@ -25,6 +25,8 @@ TABLAS_A_RESPALDAR = [
     "actualizaciones_info",
     "chats_avisados_actualizaciones",
     "reportes",
+    "cripto_premium_users",
+    "cripto_alertas",
 ]
 
 
@@ -46,6 +48,36 @@ def _get_pg_connection():
     except Exception as e:
         logger.error(f"No se pudo conectar al Postgres de backup: {e}")
         return None
+
+
+def _asegurar_esquema_cripto(conn):
+    """Añade las tablas nuevas también en instalaciones de backup existentes."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cripto_premium_users (
+            chat_id TEXT PRIMARY KEY,
+            activo BOOLEAN NOT NULL DEFAULT TRUE,
+            creado_en TIMESTAMPTZ DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS cripto_alertas (
+            id BIGINT PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            operador TEXT NOT NULL,
+            precio_objetivo NUMERIC(38, 18) NOT NULL,
+            estado TEXT NOT NULL,
+            una_vez BOOLEAN DEFAULT TRUE,
+            precio_disparo NUMERIC(38, 18),
+            disparada_en TIMESTAMPTZ,
+            fuente TEXT,
+            creado_en TIMESTAMPTZ DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    conn.commit()
 
 
 def backup_tabla(supabase_client, conn, tabla):
@@ -132,6 +164,7 @@ def ejecutar_backup():
             logger.warning("Backup: Sin conexión a Postgres de backup. Saltando ciclo.")
             return
 
+        _asegurar_esquema_cripto(conn)
         logger.info("=== Inicio de backup Supabase → Postgres ===")
         total = 0
         errores = 0

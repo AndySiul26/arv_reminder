@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid, eliminar_mensaje
 import supabase_db
+import crypto_alerts
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
 import utilidades, os
@@ -36,6 +37,13 @@ ESTADO_GESTOR_BUSQUEDA       = "gestor_busqueda"
 ESTADO_GESTOR_DETALLE        = "gestor_detalle"
 # — ESTADO APLAZAMIENTO —
 ESTADO_APLAZAR_PERSONALIZADO = "aplazar_personalizado"
+# — ESTADOS CRIPTOALERTAS —
+ESTADO_CRIPTO_BOOK           = "cripto_book"
+ESTADO_CRIPTO_OPERADOR       = "cripto_operador"
+ESTADO_CRIPTO_PRECIO         = "cripto_precio"
+ESTADO_CRIPTO_LISTA          = "cripto_lista"
+ESTADO_CRIPTO_DETALLE        = "cripto_detalle"
+CRIPTO_POR_PAGINA = 5
 # Estados de conversación
 ESTADO_INICIAL = "inicial"
 ESTADO_NOMBRE_TAREA = "nombre_tarea"
@@ -445,6 +453,347 @@ def _filtrar_recordatorios(recordatorios, filtro="todos", busqueda=""):
         ]
 
     return resultado
+
+
+def _mensaje_premium_cripto(chat_id=None):
+    mensaje = (
+        "💎 Criptoalertas Premium\n\n"
+        "Esta función requiere acceso premium. Solicita al administrador que "
+        "habilite tu cuenta para crear y administrar alertas de mercado."
+    )
+    if chat_id:
+        mensaje += f"\n\nTu ID de acceso: {chat_id}"
+    return mensaje
+
+
+def _guardar_crypto_message_id(chat_id, response, fallback=None):
+    message_id = fallback
+    if response and response.status_code == 200:
+        try:
+            message_id = response.json().get("result", {}).get(
+                "message_id", fallback
+            )
+        except (AttributeError, TypeError, ValueError):
+            pass
+    if message_id:
+        conversaciones[chat_id]["datos"]["crypto_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    return message_id
+
+
+def _mostrar_crypto_grid(chat_id, mensaje, filas, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    message_id = (
+        message_id
+        or datos.get("crypto_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        response = editar_mensaje_con_grid(
+            chat_id, message_id, mensaje, filas
+        )
+        if response and response.status_code == 200:
+            _guardar_crypto_message_id(chat_id, response, message_id)
+            return response
+    response = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+    _guardar_crypto_message_id(chat_id, response)
+    return response
+
+
+def iniciar_criptoalerta(chat_id, nombre_usuario, message_id=None):
+    """Inicia la creación de una alerta de precio pública de Bitso."""
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    datos = conversaciones[chat_id]["datos"]
+    datos.pop("crypto_edit_id", None)
+    datos.pop("crypto_book", None)
+    datos.pop("crypto_operador", None)
+    if message_id:
+        datos["crypto_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    else:
+        datos.pop("crypto_message_id", None)
+        conversaciones[chat_id]["id_callback"] = None
+
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_BOOK
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [
+            {"texto": "BTC/MXN", "data": "crypto_book:btc_mxn"},
+            {"texto": "ETH/MXN", "data": "crypto_book:eth_mxn"},
+        ],
+        [
+            {"texto": "SOL/MXN", "data": "crypto_book:sol_mxn"},
+            {"texto": "XRP/MXN", "data": "crypto_book:xrp_mxn"},
+        ],
+        [{"texto": "✍️ Escribir otro mercado", "data": "crypto_book_custom"}],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ]
+    _mostrar_crypto_grid(
+        chat_id,
+        "💎 Criptoalerta Premium\n\n"
+        "Selecciona un mercado de Bitso o escribe otro, por ejemplo: "
+        "BTC/USD, ETH/BTC o PEPE/MXN.",
+        filas,
+        message_id,
+    )
+    return ""
+
+
+def _normalizar_book(texto):
+    return (
+        str(texto or "")
+        .strip()
+        .lower()
+        .replace("/", "_")
+        .replace("-", "_")
+        .replace(" ", "")
+    )
+
+
+def _seleccionar_crypto_book(chat_id, book):
+    book = _normalizar_book(book)
+    try:
+        books = crypto_alerts.obtener_libros_bitso()
+    except Exception as exc:
+        print(f"[ERROR] No se pudieron cargar mercados Bitso: {exc}")
+        return "Bitso no está disponible en este momento. Intenta más tarde."
+
+    if book not in books:
+        conversaciones[chat_id]["wait_callback"] = False
+        return (
+            "Ese mercado no está disponible en Bitso. Escribe un par válido, "
+            "por ejemplo BTC/MXN."
+        )
+
+    conversaciones[chat_id]["datos"]["crypto_book"] = book
+    conversaciones[chat_id]["datos"].pop("crypto_operador", None)
+    return _mostrar_operador_crypto(chat_id)
+
+
+def _mostrar_operador_crypto(chat_id):
+    datos = conversaciones[chat_id]["datos"]
+    book = datos["crypto_book"]
+    current = "no disponible"
+    quote = book.split("_", 1)[-1].upper()
+    try:
+        ticker = crypto_alerts.obtener_ticker_bitso(book)
+        current = (
+            f"{crypto_alerts.formatear_precio(ticker['last'])} {quote}"
+        )
+    except Exception as exc:
+        print(f"[WARN] No se pudo mostrar ticker de {book}: {exc}")
+
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_OPERADOR
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [
+            {"texto": "📈 Alcance o supere (≥)", "data": "crypto_op:gte"},
+            {"texto": "📉 Alcance o baje (≤)", "data": "crypto_op:lte"},
+        ],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ]
+    _mostrar_crypto_grid(
+        chat_id,
+        f"💎 {crypto_alerts.nombre_book(book)}\n\n"
+        f"Precio actual aproximado: {current}\n\n"
+        "¿Cuándo deseas recibir la alerta?",
+        filas,
+    )
+    return ""
+
+
+def _pedir_precio_crypto(chat_id, operador):
+    if operador not in ("gte", "lte"):
+        return "No pude interpretar esa condición."
+    datos = conversaciones[chat_id]["datos"]
+    datos["crypto_operador"] = operador
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_PRECIO
+    conversaciones[chat_id]["wait_callback"] = False
+    simbolo = "≥" if operador == "gte" else "≤"
+    book = datos["crypto_book"]
+    _mostrar_crypto_grid(
+        chat_id,
+        f"💎 {crypto_alerts.nombre_book(book)} · Precio {simbolo}\n\n"
+        "Escribe el precio objetivo. Puedes usar formatos como:\n"
+        "• 1500000\n"
+        "• $1,500,000\n"
+        "• 0.25",
+        [],
+    )
+    return ""
+
+
+def _guardar_precio_crypto(chat_id, texto):
+    precio = crypto_alerts.parsear_precio(texto)
+    if precio is None:
+        return (
+            "No pude interpretar el precio. Escribe únicamente una cantidad "
+            "positiva, por ejemplo: 1500000 o 0.25."
+        )
+
+    datos = conversaciones[chat_id]["datos"]
+    book = datos["crypto_book"]
+    operador = datos["crypto_operador"]
+    edit_id = datos.get("crypto_edit_id")
+    if edit_id:
+        alerta = crypto_alerts.actualizar_alerta_condicion(
+            edit_id, chat_id, operador, precio
+        )
+        accion = "actualizada"
+    else:
+        alerta = crypto_alerts.crear_alerta(
+            chat_id,
+            datos.get("usuario", "Usuario"),
+            book,
+            operador,
+            precio,
+        )
+        accion = "creada"
+
+    if not alerta:
+        return "No pude guardar la criptoalerta. Intenta nuevamente."
+
+    simbolo = "≥" if operador == "gte" else "≤"
+    quote = book.split("_", 1)[-1].upper()
+    confirmacion = (
+        f"✅ Criptoalerta {accion}\n\n"
+        f"Mercado: {crypto_alerts.nombre_book(book)}\n"
+        f"Condición: Precio {simbolo} "
+        f"{crypto_alerts.formatear_precio(precio)} {quote}\n"
+        "Frecuencia: aproximadamente cada minuto\n"
+        "Fuente: Bitso (último precio negociado)\n\n"
+        "La alerta se enviará una sola vez cuando se cumpla la condición."
+    )
+    message_id = datos.get("crypto_message_id")
+    _mostrar_crypto_grid(
+        chat_id, confirmacion, [], message_id=message_id
+    )
+    guardar_estado(chat_id, "")
+    conversaciones.pop(chat_id, None)
+    return ""
+
+
+def iniciar_gestor_criptoalertas(
+    chat_id, nombre_usuario, message_id=None, pagina=0
+):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    if message_id:
+        conversaciones[chat_id]["datos"]["crypto_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    elif conversaciones[chat_id]["estado"] not in (
+        ESTADO_CRIPTO_LISTA,
+        ESTADO_CRIPTO_DETALLE,
+    ):
+        conversaciones[chat_id]["datos"].pop("crypto_message_id", None)
+        conversaciones[chat_id]["id_callback"] = None
+    return _mostrar_lista_criptoalertas(chat_id, pagina=pagina)
+
+
+def _mostrar_lista_criptoalertas(chat_id, pagina=0):
+    alertas = crypto_alerts.listar_alertas_usuario(chat_id)
+    datos = conversaciones[chat_id]["datos"]
+    datos["crypto_lista"] = alertas
+    total = len(alertas)
+    total_paginas = max(
+        1, (total + CRIPTO_POR_PAGINA - 1) // CRIPTO_POR_PAGINA
+    )
+    pagina = max(0, min(pagina, total_paginas - 1))
+    datos["crypto_pagina"] = pagina
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_LISTA
+    conversaciones[chat_id]["wait_callback"] = True
+
+    inicio = pagina * CRIPTO_POR_PAGINA
+    filas = []
+    for alerta in alertas[inicio:inicio + CRIPTO_POR_PAGINA]:
+        icono = "🟢" if alerta.get("estado") == "activa" else "✅"
+        simbolo = "≥" if alerta.get("operador") == "gte" else "≤"
+        filas.append([{
+            "texto": (
+                f"{icono} {crypto_alerts.nombre_book(alerta['book'])} "
+                f"{simbolo} "
+                f"{crypto_alerts.formatear_precio(alerta['precio_objetivo'])}"
+            ),
+            "data": f"crypto_detail:{alerta['id']}",
+        }])
+
+    if total_paginas > 1:
+        nav = []
+        if pagina > 0:
+            nav.append({
+                "texto": "« Anterior", "data": f"crypto_pg:{pagina - 1}"
+            })
+        nav.append({
+            "texto": f"{pagina + 1}/{total_paginas}",
+            "data": "crypto_noop",
+        })
+        if pagina < total_paginas - 1:
+            nav.append({
+                "texto": "Siguiente »", "data": f"crypto_pg:{pagina + 1}"
+            })
+        filas.append(nav)
+
+    filas.append([{
+        "texto": "➕ Nueva criptoalerta", "data": "crypto_new"
+    }])
+    filas.append([{"texto": "❌ Cerrar", "data": "cancelar"}])
+    mensaje = (
+        "💎 Criptoalertas Premium\n\n"
+        f"Alertas registradas: {total}\n"
+        "🟢 activa · ✅ disparada"
+    )
+    if not total:
+        mensaje += "\n\nTodavía no tienes criptoalertas."
+    _mostrar_crypto_grid(chat_id, mensaje, filas)
+    return ""
+
+
+def _mostrar_detalle_criptoalerta(chat_id, alerta_id):
+    alerta = crypto_alerts.obtener_alerta_usuario(alerta_id, chat_id)
+    if not alerta:
+        return "No encontré esa criptoalerta."
+
+    datos = conversaciones[chat_id]["datos"]
+    datos["crypto_alert_id"] = alerta["id"]
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_DETALLE
+    conversaciones[chat_id]["wait_callback"] = True
+    simbolo = "≥" if alerta["operador"] == "gte" else "≤"
+    quote = alerta["book"].split("_", 1)[-1].upper()
+    estado = (
+        "Activa" if alerta.get("estado") == "activa" else "Disparada"
+    )
+    filas = [[{
+        "texto": "✏️ Editar condición",
+        "data": f"crypto_edit:{alerta['id']}",
+    }]]
+    if alerta.get("estado") == "disparada":
+        filas.append([{
+            "texto": "🔄 Reactivar",
+            "data": f"crypto_reactivate:{alerta['id']}",
+        }])
+    filas.extend([
+        [{
+            "texto": "🗑 Eliminar",
+            "data": f"crypto_delete:{alerta['id']}",
+        }],
+        [{"texto": "⬅️ Volver", "data": "crypto_back"}],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ])
+    mensaje = (
+        f"💎 Criptoalerta #{alerta['id']}\n\n"
+        f"Mercado: {crypto_alerts.nombre_book(alerta['book'])}\n"
+        f"Condición: Precio {simbolo} "
+        f"{crypto_alerts.formatear_precio(alerta['precio_objetivo'])} "
+        f"{quote}\n"
+        f"Estado: {estado}\n"
+        "Fuente: Bitso (último precio negociado)"
+    )
+    _mostrar_crypto_grid(chat_id, mensaje, filas)
+    return ""
 
 
 def _fecha_recordatorio_local(recordatorio, zona_horaria=""):
@@ -1067,6 +1416,10 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             chat_id, nombre_usuario, iniciar_busqueda=True
         )
         return _ejecutar_busqueda_gestor(chat_id, busqueda)
+    if texto_minusculas in ["/criptoalerta", "criptoalerta"]:
+        return iniciar_criptoalerta(chat_id, nombre_usuario)
+    if texto_minusculas in ["/criptoalertas", "criptoalertas"]:
+        return iniciar_gestor_criptoalertas(chat_id, nombre_usuario)
     if texto.lower() in ["/reportar", "reportar"]:
         return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
@@ -1075,10 +1428,16 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_GESTOR_LISTA,
             ESTADO_GESTOR_BUSQUEDA,
             ESTADO_GESTOR_DETALLE,
+            ESTADO_CRIPTO_BOOK,
+            ESTADO_CRIPTO_OPERADOR,
+            ESTADO_CRIPTO_PRECIO,
+            ESTADO_CRIPTO_LISTA,
+            ESTADO_CRIPTO_DETALLE,
         ]:
             message_id = (
                 id_callback
                 or conversaciones[chat_id]["datos"].get("gestor_message_id")
+                or conversaciones[chat_id]["datos"].get("crypto_message_id")
                 or conversaciones[chat_id].get("id_callback")
             )
             if message_id:
@@ -1126,6 +1485,91 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             minutos,
             datos.get("aplazar_message_id"),
         )
+
+    # — CREACIÓN DE CRIPTOALERTA —
+    if estado_actual == ESTADO_CRIPTO_BOOK:
+        if texto == "crypto_book_custom":
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_crypto_grid(
+                chat_id,
+                "💎 Escribe el mercado de Bitso que deseas vigilar.\n\n"
+                "Ejemplos: BTC/MXN, ETH/USD, SOL/MXN.",
+                [],
+            )
+            return ""
+        if texto.startswith("crypto_book:"):
+            return _seleccionar_crypto_book(chat_id, texto.split(":", 1)[1])
+        return _seleccionar_crypto_book(chat_id, texto)
+
+    if estado_actual == ESTADO_CRIPTO_OPERADOR:
+        if texto.startswith("crypto_op:"):
+            return _pedir_precio_crypto(chat_id, texto.split(":", 1)[1])
+        return "Selecciona si el precio debe subir o bajar hasta el objetivo."
+
+    if estado_actual == ESTADO_CRIPTO_PRECIO:
+        return _guardar_precio_crypto(chat_id, texto)
+
+    # — GESTOR DE CRIPTOALERTAS —
+    if estado_actual == ESTADO_CRIPTO_LISTA:
+        if texto.startswith("crypto_detail:"):
+            try:
+                return _mostrar_detalle_criptoalerta(
+                    chat_id, int(texto.split(":", 1)[1])
+                )
+            except ValueError:
+                return "No pude identificar esa criptoalerta."
+        if texto.startswith("crypto_pg:"):
+            try:
+                return _mostrar_lista_criptoalertas(
+                    chat_id, int(texto.split(":", 1)[1])
+                )
+            except ValueError:
+                return ""
+        if texto == "crypto_new":
+            return iniciar_criptoalerta(
+                chat_id,
+                nombre_usuario,
+                conversaciones[chat_id]["datos"].get("crypto_message_id"),
+            )
+        if texto == "crypto_noop":
+            conversaciones[chat_id]["wait_callback"] = True
+            return ""
+        return ""
+
+    if estado_actual == ESTADO_CRIPTO_DETALLE:
+        try:
+            if texto.startswith("crypto_edit:"):
+                alerta_id = int(texto.split(":", 1)[1])
+                alerta = crypto_alerts.obtener_alerta_usuario(
+                    alerta_id, chat_id
+                )
+                if not alerta:
+                    return "No encontré esa criptoalerta."
+                conversaciones[chat_id]["datos"].update({
+                    "crypto_edit_id": alerta_id,
+                    "crypto_book": alerta["book"],
+                })
+                return _mostrar_operador_crypto(chat_id)
+            if texto.startswith("crypto_reactivate:"):
+                alerta_id = int(texto.split(":", 1)[1])
+                if crypto_alerts.reactivar_alerta(alerta_id, chat_id):
+                    return _mostrar_detalle_criptoalerta(
+                        chat_id, alerta_id
+                    )
+                return "No pude reactivar esa criptoalerta."
+            if texto.startswith("crypto_delete:"):
+                alerta_id = int(texto.split(":", 1)[1])
+                if crypto_alerts.eliminar_alerta(alerta_id, chat_id):
+                    return _mostrar_lista_criptoalertas(chat_id, pagina=0)
+                return "No pude eliminar esa criptoalerta."
+        except ValueError:
+            return "No pude identificar esa criptoalerta."
+        if texto == "crypto_back":
+            return _mostrar_lista_criptoalertas(
+                chat_id,
+                conversaciones[chat_id]["datos"].get("crypto_pagina", 0),
+            )
+        return ""
 
     # — GESTOR UNIFICADO: MENÚ —
     if estado_actual == ESTADO_GESTOR_MENU:
@@ -2122,6 +2566,8 @@ def mostrar_ayuda(nombre_usuario):
     mensaje += "• /recordatorio - Crear un nuevo recordatorio\n"
     mensaje += "• /recordatorios - Buscar, consultar y editar tus recordatorios\n"
     mensaje += "• /buscar - Buscar por nombre, descripción o ID\n"
+    mensaje += "• /criptoalerta - Crear una alerta de precio premium\n"
+    mensaje += "• /criptoalertas - Administrar alertas de criptomonedas\n"
     mensaje += "• /reportar - Reportar un problema o incidencia\n"
     mensaje += "• /ayuda - Mostrar este mensaje de ayuda\n\n"
     mensaje += "También puedes aplazar un aviso 5, 10, 20 minutos o elegir un tiempo personalizado.\n\n"
@@ -2252,6 +2698,19 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             )
         except (TypeError, ValueError):
             return "No pude identificar el recordatorio que deseas aplazar."
+
+    # Entradas globales desde /start: deben abrir un flujo nuevo aunque exista
+    # otra conversación con botones pendiente.
+    if callback_data == "nueva_criptoalerta":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return iniciar_criptoalerta(
+            chat_id, nombre_usuario, message_id=id_callback
+        )
+    if callback_data == "gestor_criptoalertas":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return iniciar_gestor_criptoalertas(
+            chat_id, nombre_usuario, message_id=id_callback
+        )
 
     if chat_id in conversaciones:
         if conversaciones[chat_id].get("wait_callback", False):

@@ -84,7 +84,9 @@ def manejar_mensaje(data):
             botones=[
                 {"texto": "🆕 Nuevo Recordatorio", "data": "nuevo_recordatorio"},
                 {"texto": "📋 Gestionar Recordatorios", "data": "gestor_recordatorios"},
-                {"texto": "🔎 Buscar Recordatorios", "data": "buscar_recordatorios"}
+                {"texto": "🔎 Buscar Recordatorios", "data": "buscar_recordatorios"},
+                {"texto": "💎 Nueva Criptoalerta", "data": "nueva_criptoalerta"},
+                {"texto": "📈 Gestionar Criptoalertas", "data": "gestor_criptoalertas"}
             ]
         )
     elif text.startswith("/ayuda"):

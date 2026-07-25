@@ -49,7 +49,7 @@ fi
 echo "📋 Configuring Telegram command menu..."
 curl -sS -X POST \
      -H "Content-Type: application/json" \
-     -d '{"commands":[{"command":"recordatorio","description":"Registrar un nuevo recordatorio"},{"command":"recordatorios","description":"Buscar, consultar y editar recordatorios"},{"command":"buscar","description":"Buscar por nombre, descripción o ID"},{"command":"reportar","description":"Reportar un problema"},{"command":"ayuda","description":"Mostrar ayuda"}]}' \
+     -d '{"commands":[{"command":"recordatorio","description":"Registrar un nuevo recordatorio"},{"command":"recordatorios","description":"Buscar, consultar y editar recordatorios"},{"command":"buscar","description":"Buscar por nombre, descripción o ID"},{"command":"criptoalerta","description":"Crear una alerta de precio premium"},{"command":"criptoalertas","description":"Administrar alertas de criptomonedas"},{"command":"reportar","description":"Reportar un problema"},{"command":"ayuda","description":"Mostrar ayuda"}]}' \
      "https://api.telegram.org/bot$TELEGRAM_TOKEN/setMyCommands"
 echo ""
 

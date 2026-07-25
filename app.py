@@ -8,6 +8,10 @@ from flask import Flask
 
 from supabase_db import inicializar_supabase, actualizar_modo_tester, leer_modo_tester
 from reminders import iniciar_administrador, detener_administrador
+from crypto_alerts import (
+    iniciar_monitor_criptoalertas,
+    detener_monitor_criptoalertas,
+)
 from routes import routes  # nuestro nuevo módulo de rutas
 
 MODO_TESTER = False
@@ -25,6 +29,7 @@ def Modo_Tester(valor:bool):
 def cerrar_aplicacion():
     """Cierra correctamente los recursos al terminar la aplicación."""
     print("Cerrando aplicación...")
+    detener_monitor_criptoalertas()
     detener_administrador()
     print("Recursos liberados")
     print("Estableciendo servidor remoto...")
@@ -45,6 +50,7 @@ else:
     print("✅  Conexión a base de datos exitosa.")
     app.config['MAINTENANCE_MODE'] = False
     iniciar_administrador()
+    iniciar_monitor_criptoalertas()
 # Registrar cierre limpio
 atexit.register(cerrar_aplicacion)
 signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())

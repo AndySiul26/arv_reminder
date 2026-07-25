@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 import conversations
+import crypto_alerts
 import reminders
 
 
@@ -90,6 +92,185 @@ class SearchTests(unittest.TestCase):
             busqueda="a",
         )
         self.assertEqual([r["id"] for r in result], [10, 12])
+
+
+class CryptoPriceTests(unittest.TestCase):
+    def test_parses_common_price_formats_without_float_rounding(self):
+        cases = {
+            "1500000": Decimal("1500000"),
+            "$1,500,000 MXN": Decimal("1500000"),
+            "1.500.000,25": Decimal("1500000.25"),
+            "1,500,000.25": Decimal("1500000.25"),
+            "0,25": Decimal("0.25"),
+            "0.00001234": Decimal("0.00001234"),
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(crypto_alerts.parsear_precio(raw), expected)
+
+    def test_rejects_invalid_or_non_positive_prices(self):
+        for raw in ("", "cero", "0", "-10", "$"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(crypto_alerts.parsear_precio(raw))
+
+    def test_greater_and_lower_conditions_include_equality(self):
+        self.assertTrue(
+            crypto_alerts.es_condicion_cumplida("gte", "100", "100")
+        )
+        self.assertTrue(
+            crypto_alerts.es_condicion_cumplida("lte", "100", "100")
+        )
+        self.assertFalse(
+            crypto_alerts.es_condicion_cumplida("gte", "99.99", "100")
+        )
+        self.assertFalse(
+            crypto_alerts.es_condicion_cumplida("lte", "100.01", "100")
+        )
+
+
+class CryptoMonitorTests(unittest.TestCase):
+    @patch("crypto_alerts.marcar_alerta_disparada")
+    @patch("crypto_alerts.enviar_telegram")
+    @patch("crypto_alerts.obtener_ticker_bitso")
+    @patch("crypto_alerts.listar_alertas_activas")
+    def test_groups_alerts_by_book_and_marks_only_after_telegram_success(
+        self,
+        list_active,
+        get_ticker,
+        send_telegram,
+        mark_triggered,
+    ):
+        list_active.return_value = [
+            {
+                "id": 1,
+                "chat_id": "42",
+                "book": "btc_mxn",
+                "operador": "gte",
+                "precio_objetivo": "100",
+            },
+            {
+                "id": 2,
+                "chat_id": "43",
+                "book": "btc_mxn",
+                "operador": "lte",
+                "precio_objetivo": "200",
+            },
+        ]
+        get_ticker.return_value = {
+            "book": "btc_mxn",
+            "last": Decimal("150"),
+            "created_at": "2026-07-25T00:00:00+00:00",
+        }
+        send_telegram.return_value = Mock(status_code=200)
+        mark_triggered.return_value = True
+
+        result = crypto_alerts.MonitorCriptoAlertas().verificar_una_vez()
+
+        get_ticker.assert_called_once_with("btc_mxn")
+        self.assertEqual(send_telegram.call_count, 2)
+        self.assertEqual(mark_triggered.call_count, 2)
+        self.assertEqual(result["disparadas"], 2)
+
+    @patch("crypto_alerts.marcar_alerta_disparada")
+    @patch("crypto_alerts.enviar_telegram")
+    @patch("crypto_alerts.obtener_ticker_bitso")
+    @patch("crypto_alerts.listar_alertas_activas")
+    def test_does_not_send_when_condition_is_not_met(
+        self,
+        list_active,
+        get_ticker,
+        send_telegram,
+        mark_triggered,
+    ):
+        list_active.return_value = [{
+            "id": 1,
+            "chat_id": "42",
+            "book": "btc_mxn",
+            "operador": "gte",
+            "precio_objetivo": "200",
+        }]
+        get_ticker.return_value = {
+            "book": "btc_mxn",
+            "last": Decimal("150"),
+            "created_at": "2026-07-25T00:00:00+00:00",
+        }
+
+        result = crypto_alerts.MonitorCriptoAlertas().verificar_una_vez()
+
+        send_telegram.assert_not_called()
+        mark_triggered.assert_not_called()
+        self.assertEqual(result["disparadas"], 0)
+
+
+class CryptoConversationTests(unittest.TestCase):
+    def tearDown(self):
+        conversations.conversaciones.clear()
+
+    @patch("conversations.crypto_alerts.es_usuario_premium")
+    def test_non_premium_user_is_blocked(self, is_premium):
+        is_premium.return_value = False
+        response = conversations.iniciar_criptoalerta("42", "Andy")
+        self.assertIn("requiere acceso premium", response)
+
+    @patch("conversations.crypto_alerts.crear_alerta")
+    @patch("conversations.crypto_alerts.obtener_ticker_bitso")
+    @patch("conversations.crypto_alerts.obtener_libros_bitso")
+    @patch("conversations.crypto_alerts.es_usuario_premium")
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations.enviar_mensaje_con_grid")
+    @patch("conversations.guardar_estado")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    @patch("conversations.inicializar_conversaciones")
+    def test_complete_crypto_alert_flow(
+        self,
+        init_conversation,
+        upsert,
+        save_state,
+        send_grid,
+        edit_grid,
+        is_premium,
+        get_books,
+        get_ticker,
+        create_alert,
+    ):
+        conversations.conversaciones["42"] = {
+            "estado": "",
+            "wait_callback": False,
+            "id_callback": None,
+            "datos": {"usuario": "Andy", "zona_horaria": "UTC"},
+            "recordatorios_aviso_constante": {},
+        }
+        init_conversation.return_value = conversations.conversaciones
+        is_premium.return_value = True
+        get_books.return_value = ["btc_mxn"]
+        get_ticker.return_value = {
+            "book": "btc_mxn",
+            "last": Decimal("1400000"),
+            "created_at": "2026-07-25T00:00:00+00:00",
+        }
+        send_grid.return_value = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 800}},
+        )
+        edit_grid.return_value = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 800}},
+        )
+        create_alert.return_value = {"id": 9}
+
+        conversations.iniciar_criptoalerta("42", "Andy")
+        conversations.procesar_callback(
+            "42", "crypto_book:btc_mxn", "Andy", "private", 800
+        )
+        conversations.procesar_callback(
+            "42", "crypto_op:gte", "Andy", "private", 800
+        )
+        conversations.procesar_mensaje("42", "1500000", "Andy")
+
+        create_alert.assert_called_once_with(
+            "42", "Andy", "btc_mxn", "gte", Decimal("1500000")
+        )
+        self.assertNotIn("42", conversations.conversaciones)
 
 
 class UnifiedManagerTests(unittest.TestCase):

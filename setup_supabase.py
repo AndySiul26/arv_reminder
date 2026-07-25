@@ -238,6 +238,55 @@ def crear_tabla_reportes(supabase: Client):
         print(f"❌ Error al crear la tabla 'reportes': {e}")
 
 
+def crear_tablas_criptoalertas(supabase: Client):
+    """Crea las alertas de mercado y la lista de usuarios premium."""
+    try:
+        sql = """
+        CREATE TABLE IF NOT EXISTS cripto_premium_users (
+            chat_id TEXT PRIMARY KEY,
+            activo BOOLEAN NOT NULL DEFAULT TRUE,
+            creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS cripto_alertas (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            operador TEXT NOT NULL CHECK (operador IN ('gte', 'lte')),
+            precio_objetivo NUMERIC(38, 18) NOT NULL CHECK (precio_objetivo > 0),
+            estado TEXT NOT NULL DEFAULT 'activa'
+                CHECK (estado IN ('activa', 'disparada')),
+            una_vez BOOLEAN NOT NULL DEFAULT TRUE,
+            precio_disparo NUMERIC(38, 18),
+            disparada_en TIMESTAMPTZ,
+            fuente TEXT NOT NULL DEFAULT 'bitso',
+            creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cripto_alertas_chat
+            ON cripto_alertas (chat_id);
+        CREATE INDEX IF NOT EXISTS idx_cripto_alertas_estado_book
+            ON cripto_alertas (estado, book);
+        """
+        supabase.rpc("exec_sql", {"sql": sql}).execute()
+
+        admin_chat_id = os.getenv("TELEGRAM_TEST_USER_ID")
+        if admin_chat_id:
+            supabase.table("cripto_premium_users").upsert(
+                {"chat_id": str(admin_chat_id), "activo": True},
+                on_conflict="chat_id",
+            ).execute()
+
+        print("✅ Tablas de criptoalertas creadas correctamente.")
+        return True
+    except Exception as e:
+        print(f"❌ Error al crear tablas de criptoalertas: {e}")
+        return False
+
+
 if __name__ == "__main__":
     print("Configurando base de datos en Supabase...")
     try:
@@ -254,6 +303,7 @@ if __name__ == "__main__":
             crear_tabla_modo_tester(cliente)
             crear_tabla_chats_id_estados(cliente)
             crear_tabla_reportes(cliente)
+            crear_tablas_criptoalertas(cliente)
             print("✅ Configuración completada con éxito")
         else:
              print("⚠️ Salto de configuración por cliente nulo.")

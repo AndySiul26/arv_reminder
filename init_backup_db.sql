@@ -59,6 +59,29 @@ CREATE TABLE IF NOT EXISTS chats_avisados_actualizaciones (
     id_ultima_actualizacion INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS cripto_premium_users (
+    chat_id TEXT PRIMARY KEY,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMPTZ DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS cripto_alertas (
+    id BIGINT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    usuario TEXT,
+    book TEXT NOT NULL,
+    operador TEXT NOT NULL,
+    precio_objetivo NUMERIC(38, 18) NOT NULL,
+    estado TEXT NOT NULL,
+    una_vez BOOLEAN DEFAULT TRUE,
+    precio_disparo NUMERIC(38, 18),
+    disparada_en TIMESTAMPTZ,
+    fuente TEXT,
+    creado_en TIMESTAMPTZ DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Tabla de metadatos de backup
 CREATE TABLE IF NOT EXISTS _backup_metadata (
     id SERIAL PRIMARY KEY,
