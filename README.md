@@ -46,7 +46,12 @@ El bot permite:
   personalizada.
 - Buscar recordatorios por nombre, descripción o ID.
 - Consultar y editar desde una única lista interactiva.
-- Crear alertas premium cuando un mercado de Bitso alcance o rebase un precio.
+- Crear alertas premium con límite inferior, superior o ambos para un mercado
+  de Bitso.
+- Mostrar el precio actual en el mismo mensaje y refrescarlo cada 10 segundos.
+- Enviar criptoalertas una vez o de forma constante hasta pulsar Detener.
+- Rearmar automáticamente una criptoalerta cuando el precio se aleje 5%, 10%,
+  20% o un porcentaje personalizado.
 - Administrar, editar, reactivar y eliminar criptoalertas.
 - Consultar precios públicos de Bitso sin almacenar credenciales de trading.
 - Recibir reportes de problemas y avisar al administrador.
@@ -68,7 +73,7 @@ flowchart LR
     S --> T
     C --> D["supabase_db.py"]
     C --> CA["crypto_alerts.py"]
-    CA --> BA["API pública de Bitso"]
+    CA --> BA["REST + WebSocket públicos de Bitso"]
     CA --> SB
     CA --> S
     A["Administrador de recordatorios"] --> D
@@ -314,20 +319,34 @@ entre páginas. Las operaciones se aplican una fila a la vez en Supabase.
 `/criptoalerta` solicita:
 
 1. Mercado público de Bitso, por ejemplo `BTC/MXN`.
-2. Condición `precio >= objetivo` o `precio <= objetivo`.
-3. Precio objetivo.
+2. Límite inferior (`precio <= objetivo`), superior (`precio >= objetivo`) o
+   ambos.
+3. Tipo de aviso: único o constante.
+4. Rearme: desactivado, 5%, 10%, 20% o porcentaje personalizado.
 
-La aplicación valida el mercado contra `available_books`, muestra el último
-precio negociado (`last`) y guarda una alerta de una sola ejecución. El monitor
-agrupa todas las alertas por mercado: aunque varios usuarios vigilen `btc_mxn`,
-solo se consulta una vez ese ticker por ciclo.
+La aplicación valida el mercado contra `available_books` y mantiene el último
+precio negociado (`last`) mediante el canal público `trades` de Bitso WebSocket.
+Durante la creación edita el mismo mensaje de Telegram cada 10 segundos; REST
+se utiliza como respaldo si todavía no existe un trade reciente. El monitor
+agrupa todas las alertas por mercado para reutilizar el mismo precio.
 
 Cuando la condición se cumple, Telegram recibe el mercado, condición, objetivo,
-precio detectado, hora reportada y fuente. La alerta cambia de `activa` a
-`disparada` únicamente si Telegram confirma el envío.
+precio detectado, hora reportada y fuente. Cada lado de la banda se desarma
+independientemente únicamente si Telegram confirma el envío.
 
-`/criptoalertas` permite consultar, editar la condición, reactivar o eliminar
-alertas propias. Toda operación verifica simultáneamente el ID y el `chat_id`.
+En modo único no vuelve a avisar por ese límite hasta que se reactive
+manualmente o se complete el rearme configurado. En modo constante repite el
+aviso aproximadamente cada minuto mientras el precio siga cumpliendo la
+condición e incluye el botón `Detener esta alerta`.
+
+El rearme usa histéresis: un límite superior se arma nuevamente cuando el
+precio retrocede el porcentaje configurado por debajo del objetivo; un límite
+inferior se arma cuando el precio sube ese porcentaje por encima del objetivo.
+Esto evita disparos continuos por pequeñas oscilaciones en el límite.
+
+`/criptoalertas` permite consultar, editar la banda, el modo y el rearme,
+reactivar o eliminar alertas propias. Toda operación verifica simultáneamente
+el ID y el `chat_id`.
 
 El acceso se controla mediante `cripto_premium_users`. El chat configurado en
 `TELEGRAM_TEST_USER_ID` se habilita automáticamente durante el arranque para
@@ -380,7 +399,9 @@ El administrador usa la librería `schedule` dentro de un hilo daemon.
 | --- | --- |
 | Al arrancar | Corrige o solicita zonas horarias y revisa recordatorios vencidos. |
 | Cada 1 minuto | Consulta y envía recordatorios. |
-| Cada 1 minuto | Agrupa mercados activos, consulta Bitso y dispara criptoalertas. |
+| Conexión continua | Recibe el último precio por el WebSocket público de Bitso. |
+| Cada 10 segundos, mientras se configura | Refresca el precio en el mismo mensaje de Telegram. |
+| Cada 1 minuto | Evalúa límites y repite criptoalertas constantes activas. |
 | Cada 1 minuto, temporalmente | Reintenta solicitar zonas faltantes hasta completar la migración. |
 | Cada 5 minutos | Revisa y distribuye notas de actualización. |
 | Cada 30 minutos | Replica Supabase hacia PostgreSQL local. |
@@ -404,7 +425,7 @@ consulta, edición y envío.
 | `actualizaciones_info` | Historial de notas de actualización. |
 | `chats_avisados_actualizaciones` | Última actualización recibida por cada chat. |
 | `modo_tester` | Interruptor global del modo tester. |
-| `cripto_alertas` | Condición, mercado, objetivo y estado de cada alerta. |
+| `cripto_alertas` | Banda, modo, rearme y estado de cada criptoalerta. |
 | `cripto_premium_users` | Usuarios autorizados para las funciones premium. |
 
 #### Campos principales de `recordatorios`
@@ -666,7 +687,7 @@ heredada `TELEGRAM_BOT_TOKEN`.
 | `routes.py` | Endpoints HTTP y enrutamiento de mensajes/callbacks. |
 | `conversations.py` | Máquina de estados y lógica funcional del usuario. |
 | `reminders.py` | Scheduler, envíos vencidos, repeticiones y actualizaciones. |
-| `crypto_alerts.py` | API de Bitso, CRUD premium y monitor de condiciones. |
+| `crypto_alerts.py` | REST/WebSocket de Bitso, CRUD premium, rearme y monitor. |
 | `supabase_db.py` | Acceso centralizado a Supabase y reintentos. |
 | `services.py` | Cliente HTTP de Telegram y edición de mensajes. |
 | `utilidades.py` | Fechas, zonas horarias, intervalos y ngrok. |

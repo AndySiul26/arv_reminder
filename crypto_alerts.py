@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -12,7 +13,12 @@ import requests
 from dotenv import load_dotenv
 from supabase import create_client
 
-from services import enviar_telegram
+try:
+    import websocket
+except ImportError:  # Permite ejecutar migraciones antes de instalar dependencias.
+    websocket = None
+
+from services import enviar_mensaje_con_grid
 
 
 load_dotenv()
@@ -20,11 +26,14 @@ load_dotenv()
 BITSO_API_BASE_URL = os.getenv(
     "BITSO_API_BASE_URL", "https://bitso.com/api/v3"
 ).rstrip("/")
+BITSO_WS_URL = os.getenv("BITSO_WS_URL", "wss://ws.bitso.com")
 BITSO_TIMEOUT_SECONDS = int(os.getenv("BITSO_TIMEOUT_SECONDS", "10"))
 CRYPTO_ALERT_INTERVAL_SECONDS = max(
     60, int(os.getenv("CRYPTO_ALERT_INTERVAL_SECONDS", "60"))
 )
-# Deja margen dentro de los 60 RPM públicos para altas y consultas interactivas.
+CRYPTO_CONSTANT_INTERVAL_SECONDS = max(
+    60, int(os.getenv("CRYPTO_CONSTANT_INTERVAL_SECONDS", "60"))
+)
 MAX_BOOKS_PER_CYCLE = 45
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -89,7 +98,7 @@ def obtener_libros_bitso(forzar=False):
 
 
 def obtener_ticker_bitso(book):
-    """Obtiene el último precio negociado de un mercado."""
+    """Obtiene el último precio negociado de un mercado por REST."""
     book = str(book).strip().lower()
     payload = _bitso_get("ticker", params={"book": book})
     if not payload or payload.get("book", "").lower() != book:
@@ -119,6 +128,7 @@ def obtener_ticker_bitso(book):
         "created_at": created_at,
         "bid": payload.get("bid"),
         "ask": payload.get("ask"),
+        "source": "rest",
     }
 
 
@@ -152,6 +162,15 @@ def parsear_precio(texto):
     return value if value > 0 else None
 
 
+def parsear_porcentaje(texto):
+    raw = str(texto or "").strip().replace("%", "").replace(",", ".")
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return None
+    return value if Decimal("0") < value <= Decimal("100") else None
+
+
 def formatear_precio(value):
     value = Decimal(str(value))
     decimals = 2 if value >= 1 else 8
@@ -164,6 +183,179 @@ def formatear_precio(value):
 def nombre_book(book):
     major, _, minor = str(book).partition("_")
     return f"{major.upper()}/{minor.upper()}"
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _parse_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+class BitsoPriceStream:
+    """Mantiene en memoria el último trade de los mercados suscritos."""
+
+    def __init__(self, url=BITSO_WS_URL):
+        self.url = url
+        self._lock = threading.RLock()
+        self._subscriptions = set()
+        self._prices = {}
+        self._ws = None
+        self._thread = None
+        self._stop = threading.Event()
+        self._running = False
+
+    def iniciar(self):
+        if websocket is None or self._running:
+            return
+        self._running = True
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="bitso-price-stream",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def detener(self):
+        self._running = False
+        self._stop.set()
+        with self._lock:
+            ws = self._ws
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        if self._thread:
+            self._thread.join(timeout=2.0)
+
+    def suscribir(self, book):
+        book = str(book).strip().lower()
+        if not book:
+            return
+        with self._lock:
+            is_new = book not in self._subscriptions
+            self._subscriptions.add(book)
+            ws = self._ws
+        if is_new and ws:
+            try:
+                ws.send(json.dumps({
+                    "action": "subscribe",
+                    "book": book,
+                    "type": "trades",
+                }))
+            except Exception as exc:
+                print(f"[WARN] No se pudo suscribir {book} en Bitso WS: {exc}")
+
+    def _on_open(self, ws):
+        with self._lock:
+            self._ws = ws
+            books = sorted(self._subscriptions)
+        for book in books:
+            ws.send(json.dumps({
+                "action": "subscribe",
+                "book": book,
+                "type": "trades",
+            }))
+        print(f"Bitso WebSocket conectado ({len(books)} mercados)")
+
+    def _on_message(self, _ws, raw):
+        try:
+            message = json.loads(raw)
+            if message.get("type") != "trades":
+                return
+            book = str(message.get("book", "")).lower()
+            trades = message.get("payload") or []
+            if not book or not trades:
+                return
+            trade = max(trades, key=lambda item: int(item.get("x") or 0))
+            price = Decimal(str(trade["r"]))
+            if price <= 0:
+                return
+            timestamp_ms = int(trade.get("x") or 0)
+            generated = (
+                datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+                if timestamp_ms
+                else _utc_now()
+            )
+            with self._lock:
+                self._prices[book] = {
+                    "book": book,
+                    "last": price,
+                    "created_at": generated.isoformat(),
+                    "source": "websocket",
+                }
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            print(f"[WARN] Mensaje de Bitso WS inválido: {exc}")
+
+    def _on_error(self, _ws, error):
+        if self._running:
+            print(f"[WARN] Bitso WebSocket: {error}")
+
+    def _on_close(self, ws, _status, _message):
+        with self._lock:
+            if self._ws is ws:
+                self._ws = None
+
+    def _run(self):
+        backoff = 1
+        while self._running:
+            ws = None
+            try:
+                ws = websocket.WebSocketApp(
+                    self.url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                )
+                ws.run_forever(ping_interval=25, ping_timeout=10)
+            except Exception as exc:
+                if self._running:
+                    print(f"[WARN] Reconexión de Bitso WS pendiente: {exc}")
+            finally:
+                with self._lock:
+                    if ws is not None and self._ws is ws:
+                        self._ws = None
+            if self._running:
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 30)
+
+    def obtener(self, book, max_age_seconds=90, permitir_rest=True):
+        book = str(book).strip().lower()
+        self.suscribir(book)
+        now = _utc_now()
+        with self._lock:
+            cached = dict(self._prices.get(book) or {})
+        generated = _parse_datetime(cached.get("created_at"))
+        if cached and generated:
+            age = (now - generated).total_seconds()
+            if -60 <= age <= max_age_seconds:
+                return cached
+        if not permitir_rest:
+            return cached or None
+        ticker = obtener_ticker_bitso(book)
+        with self._lock:
+            self._prices[book] = dict(ticker)
+        return ticker
+
+
+bitso_price_stream = BitsoPriceStream()
+
+
+def obtener_precio_actual(book, max_age_seconds=90):
+    """Precio compartido: WebSocket reciente y REST como respaldo."""
+    return bitso_price_stream.obtener(book, max_age_seconds=max_age_seconds)
 
 
 def es_usuario_premium(chat_id):
@@ -187,7 +379,52 @@ def es_usuario_premium(chat_id):
         return False
 
 
-def crear_alerta(chat_id, usuario, book, operador, precio_objetivo):
+def normalizar_alerta(alerta):
+    """Adapta filas antiguas de un solo objetivo al modelo de banda."""
+    alerta = dict(alerta or {})
+    precio_min = alerta.get("precio_min")
+    precio_max = alerta.get("precio_max")
+    if precio_min is None and precio_max is None:
+        if alerta.get("operador") == "lte":
+            precio_min = alerta.get("precio_objetivo")
+        elif alerta.get("operador") == "gte":
+            precio_max = alerta.get("precio_objetivo")
+    alerta["precio_min"] = precio_min
+    alerta["precio_max"] = precio_max
+    activa = alerta.get("estado", "activa") == "activa"
+    alerta["min_armada"] = bool(
+        precio_min is not None
+        and alerta.get("min_armada", activa)
+    )
+    alerta["max_armada"] = bool(
+        precio_max is not None
+        and alerta.get("max_armada", activa)
+    )
+    alerta["aviso_constante"] = bool(alerta.get("aviso_constante", False))
+    alerta["aviso_detenido"] = bool(alerta.get("aviso_detenido", False))
+    return alerta
+
+
+def _legacy_condition(precio_min, precio_max):
+    if precio_min is not None and precio_max is None:
+        return "lte", str(precio_min)
+    if precio_max is not None and precio_min is None:
+        return "gte", str(precio_max)
+    return None, None
+
+
+def crear_alerta_banda(
+    chat_id,
+    usuario,
+    book,
+    precio_min=None,
+    precio_max=None,
+    aviso_constante=False,
+    rearme_porcentaje=None,
+):
+    if precio_min is None and precio_max is None:
+        return None
+    operador, objetivo = _legacy_condition(precio_min, precio_max)
     client = _db()
     if not client:
         return None
@@ -196,9 +433,24 @@ def crear_alerta(chat_id, usuario, book, operador, precio_objetivo):
         "usuario": usuario,
         "book": str(book).lower(),
         "operador": operador,
-        "precio_objetivo": str(precio_objetivo),
+        "precio_objetivo": objetivo,
+        "precio_min": str(precio_min) if precio_min is not None else None,
+        "precio_max": str(precio_max) if precio_max is not None else None,
+        "min_armada": precio_min is not None,
+        "max_armada": precio_max is not None,
+        "aviso_constante": bool(aviso_constante),
+        "aviso_detenido": False,
+        "rearme_porcentaje": (
+            str(rearme_porcentaje)
+            if rearme_porcentaje is not None
+            else None
+        ),
+        "lado_disparado": None,
+        "ultima_notificacion_en": None,
         "estado": "activa",
-        "una_vez": True,
+        "una_vez": not bool(aviso_constante),
+        "precio_disparo": None,
+        "disparada_en": None,
         "fuente": "bitso",
     }
     try:
@@ -207,6 +459,17 @@ def crear_alerta(chat_id, usuario, book, operador, precio_objetivo):
     except Exception as exc:
         print(f"[ERROR] No se pudo crear criptoalerta para {chat_id}: {exc}")
         return None
+
+
+def crear_alerta(chat_id, usuario, book, operador, precio_objetivo):
+    """Compatibilidad con el flujo anterior de una sola condición."""
+    return crear_alerta_banda(
+        chat_id,
+        usuario,
+        book,
+        precio_min=precio_objetivo if operador == "lte" else None,
+        precio_max=precio_objetivo if operador == "gte" else None,
+    )
 
 
 def listar_alertas_usuario(chat_id):
@@ -221,7 +484,7 @@ def listar_alertas_usuario(chat_id):
             .order("id", desc=True)
             .execute()
         )
-        return response.data or []
+        return [normalizar_alerta(item) for item in (response.data or [])]
     except Exception as exc:
         print(f"[ERROR] No se pudieron listar criptoalertas de {chat_id}: {exc}")
         return []
@@ -240,7 +503,7 @@ def obtener_alerta_usuario(alerta_id, chat_id):
             .limit(1)
             .execute()
         )
-        return response.data[0] if response.data else None
+        return normalizar_alerta(response.data[0]) if response.data else None
     except Exception as exc:
         print(f"[ERROR] No se pudo consultar criptoalerta {alerta_id}: {exc}")
         return None
@@ -265,58 +528,75 @@ def eliminar_alerta(alerta_id, chat_id):
 
 
 def reactivar_alerta(alerta_id, chat_id):
-    client = _db()
-    if not client:
+    alerta = obtener_alerta_usuario(alerta_id, chat_id)
+    if not alerta:
         return False
-    try:
-        response = (
-            client.table("cripto_alertas")
-            .update(
-                {
-                    "estado": "activa",
-                    "precio_disparo": None,
-                    "disparada_en": None,
-                    "actualizado_en": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            .eq("id", int(alerta_id))
-            .eq("chat_id", str(chat_id))
-            .execute()
-        )
-        return bool(response.data)
-    except Exception as exc:
-        print(f"[ERROR] No se pudo reactivar criptoalerta {alerta_id}: {exc}")
-        return False
+    return bool(_actualizar_alerta(
+        alerta_id,
+        {
+            "estado": "activa",
+            "min_armada": alerta.get("precio_min") is not None,
+            "max_armada": alerta.get("precio_max") is not None,
+            "aviso_detenido": False,
+            "lado_disparado": None,
+            "ultima_notificacion_en": None,
+            "precio_disparo": None,
+            "disparada_en": None,
+        },
+        chat_id=chat_id,
+    ))
+
+
+def actualizar_alerta_banda(
+    alerta_id,
+    chat_id,
+    precio_min=None,
+    precio_max=None,
+    aviso_constante=False,
+    rearme_porcentaje=None,
+):
+    operador, objetivo = _legacy_condition(precio_min, precio_max)
+    return _actualizar_alerta(
+        alerta_id,
+        {
+            "operador": operador,
+            "precio_objetivo": objetivo,
+            "precio_min": (
+                str(precio_min) if precio_min is not None else None
+            ),
+            "precio_max": (
+                str(precio_max) if precio_max is not None else None
+            ),
+            "min_armada": precio_min is not None,
+            "max_armada": precio_max is not None,
+            "aviso_constante": bool(aviso_constante),
+            "una_vez": not bool(aviso_constante),
+            "aviso_detenido": False,
+            "rearme_porcentaje": (
+                str(rearme_porcentaje)
+                if rearme_porcentaje is not None
+                else None
+            ),
+            "lado_disparado": None,
+            "ultima_notificacion_en": None,
+            "estado": "activa",
+            "precio_disparo": None,
+            "disparada_en": None,
+        },
+        chat_id=chat_id,
+    )
 
 
 def actualizar_alerta_condicion(
     alerta_id, chat_id, operador, precio_objetivo
 ):
-    """Cambia la condición y vuelve a dejar la alerta activa."""
-    client = _db()
-    if not client:
-        return None
-    try:
-        response = (
-            client.table("cripto_alertas")
-            .update(
-                {
-                    "operador": operador,
-                    "precio_objetivo": str(precio_objetivo),
-                    "estado": "activa",
-                    "precio_disparo": None,
-                    "disparada_en": None,
-                    "actualizado_en": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            .eq("id", int(alerta_id))
-            .eq("chat_id", str(chat_id))
-            .execute()
-        )
-        return response.data[0] if response.data else None
-    except Exception as exc:
-        print(f"[ERROR] No se pudo editar criptoalerta {alerta_id}: {exc}")
-        return None
+    """Compatibilidad con ediciones creadas por versiones anteriores."""
+    return actualizar_alerta_banda(
+        alerta_id,
+        chat_id,
+        precio_min=precio_objetivo if operador == "lte" else None,
+        precio_max=precio_objetivo if operador == "gte" else None,
+    )
 
 
 def listar_alertas_activas():
@@ -331,35 +611,45 @@ def listar_alertas_activas():
             .order("id")
             .execute()
         )
-        return response.data or []
+        return [normalizar_alerta(item) for item in (response.data or [])]
     except Exception as exc:
         print(f"[ERROR] No se pudieron consultar criptoalertas activas: {exc}")
         return []
 
 
-def marcar_alerta_disparada(alerta_id, precio):
+def _actualizar_alerta(alerta_id, cambios, chat_id=None):
     client = _db()
     if not client:
-        return False
+        return None
+    payload = dict(cambios)
+    payload["actualizado_en"] = _utc_now().isoformat()
     try:
-        response = (
-            client.table("cripto_alertas")
-            .update(
-                {
-                    "estado": "disparada",
-                    "precio_disparo": str(precio),
-                    "disparada_en": datetime.now(timezone.utc).isoformat(),
-                    "actualizado_en": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            .eq("id", int(alerta_id))
-            .eq("estado", "activa")
-            .execute()
+        query = client.table("cripto_alertas").update(payload).eq(
+            "id", int(alerta_id)
         )
-        return bool(response.data)
+        if chat_id is not None:
+            query = query.eq("chat_id", str(chat_id))
+        response = query.execute()
+        return normalizar_alerta(response.data[0]) if response.data else None
     except Exception as exc:
-        print(f"[ERROR] No se pudo marcar criptoalerta {alerta_id}: {exc}")
+        print(f"[ERROR] No se pudo actualizar criptoalerta {alerta_id}: {exc}")
+        return None
+
+
+def detener_alerta_constante(alerta_id, chat_id):
+    alerta = obtener_alerta_usuario(alerta_id, chat_id)
+    if not alerta or not alerta.get("aviso_constante"):
         return False
+    hay_otro_lado = bool(
+        alerta.get("min_armada") or alerta.get("max_armada")
+    )
+    tiene_rearme = alerta.get("rearme_porcentaje") is not None
+    estado = "activa" if hay_otro_lado or tiene_rearme else "disparada"
+    return bool(_actualizar_alerta(
+        alerta_id,
+        {"aviso_detenido": True, "estado": estado},
+        chat_id=chat_id,
+    ))
 
 
 def es_condicion_cumplida(operador, precio_actual, precio_objetivo):
@@ -372,20 +662,107 @@ def es_condicion_cumplida(operador, precio_actual, precio_objetivo):
     return False
 
 
-def _mensaje_alerta(alerta, ticker):
+def _lado_cumplido(alerta, precio):
+    precio = Decimal(str(precio))
+    if (
+        alerta.get("min_armada")
+        and alerta.get("precio_min") is not None
+        and precio <= Decimal(str(alerta["precio_min"]))
+    ):
+        return "min"
+    if (
+        alerta.get("max_armada")
+        and alerta.get("precio_max") is not None
+        and precio >= Decimal(str(alerta["precio_max"]))
+    ):
+        return "max"
+    return None
+
+
+def _aplicar_rearme(alerta, precio):
+    porcentaje = alerta.get("rearme_porcentaje")
+    if porcentaje is None:
+        return {}
+    pct = Decimal(str(porcentaje)) / Decimal("100")
+    precio = Decimal(str(precio))
+    cambios = {}
+    if (
+        alerta.get("precio_min") is not None
+        and not alerta.get("min_armada")
+        and precio >= Decimal(str(alerta["precio_min"])) * (1 + pct)
+    ):
+        cambios["min_armada"] = True
+        if alerta.get("lado_disparado") == "min":
+            cambios.update({
+                "lado_disparado": None,
+                "aviso_detenido": False,
+                "ultima_notificacion_en": None,
+            })
+    if (
+        alerta.get("precio_max") is not None
+        and not alerta.get("max_armada")
+        and precio <= Decimal(str(alerta["precio_max"])) * (1 - pct)
+    ):
+        cambios["max_armada"] = True
+        if alerta.get("lado_disparado") == "max":
+            cambios.update({
+                "lado_disparado": None,
+                "aviso_detenido": False,
+                "ultima_notificacion_en": None,
+            })
+    if cambios:
+        cambios["estado"] = "activa"
+    return cambios
+
+
+def _debe_repetir(alerta, precio, ahora):
+    if not alerta.get("aviso_constante") or alerta.get("aviso_detenido"):
+        return False
+    lado = alerta.get("lado_disparado")
+    if lado == "min" and alerta.get("precio_min") is not None:
+        sigue_cumplida = Decimal(str(precio)) <= Decimal(
+            str(alerta["precio_min"])
+        )
+    elif lado == "max" and alerta.get("precio_max") is not None:
+        sigue_cumplida = Decimal(str(precio)) >= Decimal(
+            str(alerta["precio_max"])
+        )
+    else:
+        return False
+    ultima = _parse_datetime(alerta.get("ultima_notificacion_en"))
+    return bool(
+        sigue_cumplida
+        and (
+            ultima is None
+            or (ahora - ultima).total_seconds()
+            >= CRYPTO_CONSTANT_INTERVAL_SECONDS
+        )
+    )
+
+
+def _mensaje_alerta(alerta, ticker, lado, repeticion=False):
     book = alerta["book"]
     quote = book.split("_", 1)[-1].upper()
-    simbolo = "≥" if alerta["operador"] == "gte" else "≤"
-    objetivo = formatear_precio(alerta["precio_objetivo"])
-    actual = formatear_precio(ticker["last"])
+    objetivo_raw = (
+        alerta["precio_min"] if lado == "min" else alerta["precio_max"]
+    )
+    simbolo = "≤" if lado == "min" else "≥"
+    encabezado = (
+        "📢 CRIPTOALERTA CONSTANTE"
+        if alerta.get("aviso_constante")
+        else "🚨 CRIPTOALERTA ALCANZADA"
+    )
+    if repeticion:
+        encabezado += " · RECORDATORIO"
     return (
-        "🚨 *CRIPTOALERTA ALCANZADA*\n\n"
-        f"💎 *Mercado:* {nombre_book(book)}\n"
-        f"🎯 *Condición:* Precio {simbolo} {objetivo} {quote}\n"
-        f"💰 *Precio detectado:* {actual} {quote}\n"
-        f"🕐 *Dato de Bitso:* {ticker.get('created_at') or 'sin fecha'}\n\n"
-        "Fuente: Bitso (`last`). Esta alerta es informativa y no constituye "
-        "asesoría financiera."
+        f"{encabezado}\n\n"
+        f"💎 Mercado: {nombre_book(book)}\n"
+        f"🎯 Condición: Precio {simbolo} "
+        f"{formatear_precio(objetivo_raw)} {quote}\n"
+        f"💰 Precio detectado: {formatear_precio(ticker['last'])} {quote}\n"
+        f"🕐 Dato de Bitso: {ticker.get('created_at') or 'sin fecha'}\n\n"
+        "Fuente: último precio negociado en Bitso. Esta alerta es "
+        "informativa y no constituye asesoría financiera."
     )
 
 
@@ -400,6 +777,7 @@ class MonitorCriptoAlertas:
     def iniciar(self):
         if self.activo:
             return
+        bitso_price_stream.iniciar()
         self.activo = True
         self._stop.clear()
         self.hilo = threading.Thread(
@@ -418,6 +796,7 @@ class MonitorCriptoAlertas:
         self._stop.set()
         if self.hilo:
             self.hilo.join(timeout=2.0)
+        bitso_price_stream.detener()
         print("Monitor de criptoalertas detenido")
 
     def _ejecutar(self):
@@ -437,10 +816,44 @@ class MonitorCriptoAlertas:
         selected = ordered[:MAX_BOOKS_PER_CYCLE]
         self._book_cursor = (start + MAX_BOOKS_PER_CYCLE) % len(books)
         print(
-            f"[WARN] {len(books)} mercados activos; se consultarán "
-            f"{len(selected)} en este ciclo para respetar el límite de Bitso."
+            f"[WARN] {len(books)} mercados activos; se revisarán "
+            f"{len(selected)} en este ciclo."
         )
         return selected
+
+    def _guardar_disparo(self, alerta, ticker, lado, ahora):
+        cambios = {
+            f"{lado}_armada": False,
+            "lado_disparado": lado,
+            "ultima_notificacion_en": ahora.isoformat(),
+            "precio_disparo": str(ticker["last"]),
+            "disparada_en": ahora.isoformat(),
+            "aviso_detenido": False,
+        }
+        otro_armado = (
+            alerta.get("max_armada") if lado == "min"
+            else alerta.get("min_armada")
+        )
+        debe_seguir_activa = bool(
+            alerta.get("aviso_constante")
+            or alerta.get("rearme_porcentaje") is not None
+            or otro_armado
+        )
+        cambios["estado"] = "activa" if debe_seguir_activa else "disparada"
+        return _actualizar_alerta(alerta["id"], cambios)
+
+    def _enviar(self, alerta, ticker, lado, repeticion=False):
+        filas = []
+        if alerta.get("aviso_constante"):
+            filas = [[{
+                "texto": "🛑 Detener esta alerta",
+                "data": f"crypto_stop:{alerta['id']}",
+            }]]
+        return enviar_mensaje_con_grid(
+            alerta["chat_id"],
+            _mensaje_alerta(alerta, ticker, lado, repeticion=repeticion),
+            filas,
+        )
 
     def verificar_una_vez(self):
         alertas = listar_alertas_activas()
@@ -449,38 +862,55 @@ class MonitorCriptoAlertas:
 
         por_book = {}
         for alerta in alertas:
-            por_book.setdefault(alerta["book"].lower(), []).append(alerta)
+            book = alerta["book"].lower()
+            por_book.setdefault(book, []).append(normalizar_alerta(alerta))
+            bitso_price_stream.suscribir(book)
 
         selected_books = self._books_del_ciclo(list(por_book))
         disparadas = 0
+        ahora = _utc_now()
         for book in selected_books:
             try:
-                ticker = obtener_ticker_bitso(book)
+                ticker = obtener_precio_actual(book)
             except Exception as exc:
                 print(f"[WARN] Bitso no respondió para {book}: {exc}")
                 continue
 
             for alerta in por_book[book]:
-                if not es_condicion_cumplida(
-                    alerta["operador"],
-                    ticker["last"],
-                    alerta["precio_objetivo"],
+                cambios_rearme = _aplicar_rearme(alerta, ticker["last"])
+                if cambios_rearme:
+                    updated = _actualizar_alerta(
+                        alerta["id"], cambios_rearme
+                    )
+                    if updated:
+                        alerta = updated
+
+                lado = _lado_cumplido(alerta, ticker["last"])
+                repeticion = False
+                if not lado and _debe_repetir(
+                    alerta, ticker["last"], ahora
                 ):
+                    lado = alerta.get("lado_disparado")
+                    repeticion = True
+                if not lado:
                     continue
-                response = enviar_telegram(
-                    alerta["chat_id"],
-                    tipo="texto",
-                    mensaje=_mensaje_alerta(alerta, ticker),
-                    formato="Markdown",
+
+                response = self._enviar(
+                    alerta, ticker, lado, repeticion=repeticion
                 )
-                if response and response.status_code == 200:
-                    if marcar_alerta_disparada(alerta["id"], ticker["last"]):
-                        disparadas += 1
-                else:
+                if not response or response.status_code != 200:
                     print(
                         f"[WARN] Telegram no confirmó criptoalerta "
                         f"{alerta.get('id')}"
                     )
+                    continue
+                if repeticion:
+                    _actualizar_alerta(
+                        alerta["id"],
+                        {"ultima_notificacion_en": ahora.isoformat()},
+                    )
+                elif self._guardar_disparo(alerta, ticker, lado, ahora):
+                    disparadas += 1
 
         return {
             "alertas": len(alertas),

@@ -2,6 +2,7 @@ import threading
 import re
 # ... el resto de tus importaciones mod detener avisos
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid, eliminar_mensaje
 import supabase_db
 import crypto_alerts
@@ -41,9 +42,19 @@ ESTADO_APLAZAR_PERSONALIZADO = "aplazar_personalizado"
 ESTADO_CRIPTO_BOOK           = "cripto_book"
 ESTADO_CRIPTO_OPERADOR       = "cripto_operador"
 ESTADO_CRIPTO_PRECIO         = "cripto_precio"
+ESTADO_CRIPTO_BANDA          = "cripto_banda"
+ESTADO_CRIPTO_PRECIO_MIN     = "cripto_precio_min"
+ESTADO_CRIPTO_PRECIO_MAX     = "cripto_precio_max"
+ESTADO_CRIPTO_MODO           = "cripto_modo"
+ESTADO_CRIPTO_REARME         = "cripto_rearme"
+ESTADO_CRIPTO_REARME_CUSTOM  = "cripto_rearme_custom"
 ESTADO_CRIPTO_LISTA          = "cripto_lista"
 ESTADO_CRIPTO_DETALLE        = "cripto_detalle"
 CRIPTO_POR_PAGINA = 5
+CRYPTO_LIVE_UPDATE_SECONDS = max(
+    10, int(os.getenv("CRYPTO_LIVE_UPDATE_SECONDS", "10"))
+)
+_crypto_render_locks = {}
 # Estados de conversación
 ESTADO_INICIAL = "inicial"
 ESTADO_NOMBRE_TAREA = "nombre_tarea"
@@ -481,8 +492,13 @@ def _guardar_crypto_message_id(chat_id, response, fallback=None):
     return message_id
 
 
-def _mostrar_crypto_grid(chat_id, mensaje, filas, message_id=None):
+def _mostrar_crypto_grid(
+    chat_id, mensaje, filas, message_id=None, actualizacion_live=False
+):
     datos = conversaciones[chat_id]["datos"]
+    render_key = (mensaje, json.dumps(filas, ensure_ascii=False, sort_keys=True))
+    if actualizacion_live and datos.get("crypto_last_render") == render_key:
+        return None
     message_id = (
         message_id
         or datos.get("crypto_message_id")
@@ -494,22 +510,35 @@ def _mostrar_crypto_grid(chat_id, mensaje, filas, message_id=None):
         )
         if response and response.status_code == 200:
             _guardar_crypto_message_id(chat_id, response, message_id)
+            datos["crypto_last_render"] = render_key
+            return response
+        if actualizacion_live:
             return response
     response = enviar_mensaje_con_grid(chat_id, mensaje, filas)
-    _guardar_crypto_message_id(chat_id, response)
+    if response and response.status_code == 200:
+        _guardar_crypto_message_id(chat_id, response)
+        datos["crypto_last_render"] = render_key
     return response
 
 
 def iniciar_criptoalerta(chat_id, nombre_usuario, message_id=None):
-    """Inicia la creación de una alerta de precio pública de Bitso."""
+    """Inicia una alerta con límite inferior, superior o ambos."""
     if not crypto_alerts.es_usuario_premium(chat_id):
         return _mensaje_premium_cripto(chat_id)
 
     inicializar_conversaciones(chat_id, nombre_usuario)
     datos = conversaciones[chat_id]["datos"]
-    datos.pop("crypto_edit_id", None)
-    datos.pop("crypto_book", None)
-    datos.pop("crypto_operador", None)
+    for key in (
+        "crypto_edit_id",
+        "crypto_book",
+        "crypto_precio_min",
+        "crypto_precio_max",
+        "crypto_aviso_constante",
+        "crypto_rearme_porcentaje",
+        "crypto_last_render",
+    ):
+        datos.pop(key, None)
+    datos["crypto_live_token"] = datos.get("crypto_live_token", 0) + 1
     if message_id:
         datos["crypto_message_id"] = message_id
         conversaciones[chat_id]["id_callback"] = message_id
@@ -568,108 +597,338 @@ def _seleccionar_crypto_book(chat_id, book):
             "por ejemplo BTC/MXN."
         )
 
-    conversaciones[chat_id]["datos"]["crypto_book"] = book
-    conversaciones[chat_id]["datos"].pop("crypto_operador", None)
-    return _mostrar_operador_crypto(chat_id)
-
-
-def _mostrar_operador_crypto(chat_id):
     datos = conversaciones[chat_id]["datos"]
-    book = datos["crypto_book"]
-    current = "no disponible"
-    quote = book.split("_", 1)[-1].upper()
+    datos["crypto_book"] = book
+    crypto_alerts.bitso_price_stream.iniciar()
+    crypto_alerts.bitso_price_stream.suscribir(book)
+    _mostrar_banda_crypto(chat_id)
+    _iniciar_actualizador_precio_crypto(chat_id)
+    return ""
+
+
+def _ticker_crypto(chat_id):
+    datos = conversaciones.get(chat_id, {}).get("datos", {})
+    book = datos.get("crypto_book")
+    if not book:
+        return None
     try:
-        ticker = crypto_alerts.obtener_ticker_bitso(book)
-        current = (
-            f"{crypto_alerts.formatear_precio(ticker['last'])} {quote}"
-        )
+        ticker = crypto_alerts.obtener_precio_actual(book)
+        datos["crypto_ticker"] = ticker
+        return ticker
     except Exception as exc:
-        print(f"[WARN] No se pudo mostrar ticker de {book}: {exc}")
-
-    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_OPERADOR
-    conversaciones[chat_id]["wait_callback"] = True
-    filas = [
-        [
-            {"texto": "📈 Alcance o supere (≥)", "data": "crypto_op:gte"},
-            {"texto": "📉 Alcance o baje (≤)", "data": "crypto_op:lte"},
-        ],
-        [{"texto": "❌ Cancelar", "data": "cancelar"}],
-    ]
-    _mostrar_crypto_grid(
-        chat_id,
-        f"💎 {crypto_alerts.nombre_book(book)}\n\n"
-        f"Precio actual aproximado: {current}\n\n"
-        "¿Cuándo deseas recibir la alerta?",
-        filas,
-    )
-    return ""
+        print(f"[WARN] No se pudo obtener precio de {book}: {exc}")
+        return datos.get("crypto_ticker")
 
 
-def _pedir_precio_crypto(chat_id, operador):
-    if operador not in ("gte", "lte"):
-        return "No pude interpretar esa condición."
+def _texto_banda_crypto(chat_id, ticker=None, instruccion=None):
     datos = conversaciones[chat_id]["datos"]
-    datos["crypto_operador"] = operador
-    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_PRECIO
-    conversaciones[chat_id]["wait_callback"] = False
-    simbolo = "≥" if operador == "gte" else "≤"
     book = datos["crypto_book"]
+    quote = book.split("_", 1)[-1].upper()
+    ticker = ticker or datos.get("crypto_ticker")
+    actual = (
+        f"{crypto_alerts.formatear_precio(ticker['last'])} {quote}"
+        if ticker and ticker.get("last") is not None
+        else "temporalmente no disponible"
+    )
+    precio_min = datos.get("crypto_precio_min")
+    precio_max = datos.get("crypto_precio_max")
+    inferior = (
+        f"precio ≤ {crypto_alerts.formatear_precio(precio_min)} {quote}"
+        if precio_min is not None else "sin configurar"
+    )
+    superior = (
+        f"precio ≥ {crypto_alerts.formatear_precio(precio_max)} {quote}"
+        if precio_max is not None else "sin configurar"
+    )
+    mensaje = (
+        f"💎 {crypto_alerts.nombre_book(book)} · Banda de alerta\n\n"
+        f"📉 Límite inferior: {inferior}\n"
+        f"💰 Precio actual: {actual}\n"
+        f"📈 Límite superior: {superior}\n\n"
+        "El precio actual se actualiza en este mismo mensaje cada "
+        f"{CRYPTO_LIVE_UPDATE_SECONDS} segundos."
+    )
+    if instruccion:
+        mensaje += f"\n\n{instruccion}"
+    return mensaje
+
+
+def _filas_banda_crypto(chat_id):
+    datos = conversaciones[chat_id]["datos"]
+    filas = [[
+        {"texto": "📉 Fijar límite inferior", "data": "crypto_set:min"},
+        {"texto": "📈 Fijar límite superior", "data": "crypto_set:max"},
+    ]]
+    quitar = []
+    if datos.get("crypto_precio_min") is not None:
+        quitar.append({
+            "texto": "🗑 Quitar inferior", "data": "crypto_remove:min"
+        })
+    if datos.get("crypto_precio_max") is not None:
+        quitar.append({
+            "texto": "🗑 Quitar superior", "data": "crypto_remove:max"
+        })
+    if quitar:
+        filas.append(quitar)
+    if (
+        datos.get("crypto_precio_min") is not None
+        or datos.get("crypto_precio_max") is not None
+    ):
+        filas.append([{
+            "texto": "Continuar ➡️", "data": "crypto_band_continue"
+        }])
+    filas.append([{"texto": "❌ Cancelar", "data": "cancelar"}])
+    return filas
+
+
+def _mostrar_banda_crypto(chat_id, actualizacion_live=False):
+    if chat_id not in conversaciones:
+        return ""
+    ticker = _ticker_crypto(chat_id)
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_BANDA
+    conversaciones[chat_id]["wait_callback"] = True
     _mostrar_crypto_grid(
         chat_id,
-        f"💎 {crypto_alerts.nombre_book(book)} · Precio {simbolo}\n\n"
-        "Escribe el precio objetivo. Puedes usar formatos como:\n"
-        "• 1500000\n"
-        "• $1,500,000\n"
-        "• 0.25",
-        [],
+        _texto_banda_crypto(
+            chat_id,
+            ticker,
+            "Configura uno o ambos límites y después pulsa Continuar.",
+        ),
+        _filas_banda_crypto(chat_id),
+        actualizacion_live=actualizacion_live,
     )
     return ""
 
 
-def _guardar_precio_crypto(chat_id, texto):
+def _pedir_limite_crypto(chat_id, lado, actualizacion_live=False):
+    if lado not in ("min", "max"):
+        return "No pude identificar el límite."
+    estado = (
+        ESTADO_CRIPTO_PRECIO_MIN
+        if lado == "min" else ESTADO_CRIPTO_PRECIO_MAX
+    )
+    conversaciones[chat_id]["estado"] = estado
+    conversaciones[chat_id]["wait_callback"] = False
+    condicion = "inferior (precio ≤ objetivo)" if lado == "min" else (
+        "superior (precio ≥ objetivo)"
+    )
+    _mostrar_crypto_grid(
+        chat_id,
+        _texto_banda_crypto(
+            chat_id,
+            _ticker_crypto(chat_id),
+            f"Escribe el límite {condicion}.\n"
+            "Ejemplos: 1500000 · $1,500,000 · 0.25",
+        ),
+        [[{"texto": "⬅️ Volver a la banda", "data": "crypto_band_back"}]],
+        actualizacion_live=actualizacion_live,
+    )
+    return ""
+
+
+def _iniciar_actualizador_precio_crypto(chat_id):
+    datos = conversaciones[chat_id]["datos"]
+    datos["crypto_live_token"] = datos.get("crypto_live_token", 0) + 1
+    token = datos["crypto_live_token"]
+
+    def actualizar():
+        while True:
+            threading.Event().wait(CRYPTO_LIVE_UPDATE_SECONDS)
+            conversacion = conversaciones.get(chat_id)
+            if not conversacion:
+                return
+            datos_actuales = conversacion.get("datos", {})
+            if datos_actuales.get("crypto_live_token") != token:
+                return
+            estado = conversacion.get("estado")
+            if estado not in (
+                ESTADO_CRIPTO_BANDA,
+                ESTADO_CRIPTO_PRECIO_MIN,
+                ESTADO_CRIPTO_PRECIO_MAX,
+            ):
+                return
+            lock = _crypto_render_locks.setdefault(
+                str(chat_id), threading.Lock()
+            )
+            if not lock.acquire(blocking=False):
+                continue
+            try:
+                if estado == ESTADO_CRIPTO_BANDA:
+                    _mostrar_banda_crypto(chat_id, actualizacion_live=True)
+                else:
+                    lado = (
+                        "min" if estado == ESTADO_CRIPTO_PRECIO_MIN else "max"
+                    )
+                    _pedir_limite_crypto(
+                        chat_id, lado, actualizacion_live=True
+                    )
+            finally:
+                lock.release()
+
+    threading.Thread(
+        target=actualizar,
+        name=f"crypto-live-{chat_id}",
+        daemon=True,
+    ).start()
+
+
+def _guardar_limite_crypto(chat_id, texto, lado):
     precio = crypto_alerts.parsear_precio(texto)
     if precio is None:
         return (
             "No pude interpretar el precio. Escribe únicamente una cantidad "
             "positiva, por ejemplo: 1500000 o 0.25."
         )
-
     datos = conversaciones[chat_id]["datos"]
+    otro = datos.get(
+        "crypto_precio_max" if lado == "min" else "crypto_precio_min"
+    )
+    if lado == "min" and otro is not None and precio >= otro:
+        return (
+            "El límite inferior debe ser menor que el límite superior "
+            f"({crypto_alerts.formatear_precio(otro)})."
+        )
+    if lado == "max" and otro is not None and precio <= otro:
+        return (
+            "El límite superior debe ser mayor que el límite inferior "
+            f"({crypto_alerts.formatear_precio(otro)})."
+        )
+    datos[f"crypto_precio_{lado}"] = precio
+    return _mostrar_banda_crypto(chat_id)
+
+
+def _mostrar_modo_crypto(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_MODO
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_crypto_grid(
+        chat_id,
+        "🔔 Tipo de aviso\n\n"
+        "Aviso único: se envía una vez al alcanzar el límite.\n\n"
+        "Aviso constante: se repite aproximadamente cada minuto mientras "
+        "el precio siga cumpliendo la condición, hasta que pulses Detener.",
+        [
+            [
+                {"texto": "🔔 Aviso único", "data": "crypto_mode:once"},
+                {
+                    "texto": "📢 Aviso constante",
+                    "data": "crypto_mode:constant",
+                },
+            ],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
+def _mostrar_rearme_crypto(chat_id, modo):
+    if modo not in ("once", "constant"):
+        return "No pude identificar el tipo de aviso."
+    conversaciones[chat_id]["datos"]["crypto_aviso_constante"] = (
+        modo == "constant"
+    )
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_REARME
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_crypto_grid(
+        chat_id,
+        "🔄 Rearme automático\n\n"
+        "Después de dispararse, la alerta puede armarse otra vez cuando el "
+        "precio se aleje del límite. Así se evitan avisos repetidos por "
+        "pequeñas variaciones alrededor del mismo precio.\n\n"
+        "Elige cuánto debe alejarse:",
+        [
+            [
+                {"texto": "No automático", "data": "crypto_rearm:none"},
+                {"texto": "5%", "data": "crypto_rearm:5"},
+            ],
+            [
+                {"texto": "10%", "data": "crypto_rearm:10"},
+                {"texto": "20%", "data": "crypto_rearm:20"},
+            ],
+            [{
+                "texto": "✍️ Personalizado",
+                "data": "crypto_rearm:custom",
+            }],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
+def _pedir_rearme_personalizado_crypto(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_REARME_CUSTOM
+    conversaciones[chat_id]["wait_callback"] = False
+    _mostrar_crypto_grid(
+        chat_id,
+        "🔄 Rearme personalizado\n\n"
+        "Escribe el porcentaje que debe alejarse el precio del límite.\n"
+        "Puedes usar, por ejemplo: 7.5% (máximo 100%).",
+        [],
+    )
+    return ""
+
+
+def _guardar_configuracion_crypto(chat_id, rearme):
+    datos = conversaciones[chat_id]["datos"]
+    precio_min = datos.get("crypto_precio_min")
+    precio_max = datos.get("crypto_precio_max")
+    if precio_min is None and precio_max is None:
+        return _mostrar_banda_crypto(chat_id)
     book = datos["crypto_book"]
-    operador = datos["crypto_operador"]
+    constante = bool(datos.get("crypto_aviso_constante"))
     edit_id = datos.get("crypto_edit_id")
     if edit_id:
-        alerta = crypto_alerts.actualizar_alerta_condicion(
-            edit_id, chat_id, operador, precio
+        alerta = crypto_alerts.actualizar_alerta_banda(
+            edit_id,
+            chat_id,
+            precio_min,
+            precio_max,
+            constante,
+            rearme,
         )
         accion = "actualizada"
     else:
-        alerta = crypto_alerts.crear_alerta(
+        alerta = crypto_alerts.crear_alerta_banda(
             chat_id,
             datos.get("usuario", "Usuario"),
             book,
-            operador,
-            precio,
+            precio_min,
+            precio_max,
+            constante,
+            rearme,
         )
         accion = "creada"
-
     if not alerta:
         return "No pude guardar la criptoalerta. Intenta nuevamente."
 
-    simbolo = "≥" if operador == "gte" else "≤"
     quote = book.split("_", 1)[-1].upper()
+    condiciones = []
+    if precio_min is not None:
+        condiciones.append(
+            f"• Baja: precio ≤ {crypto_alerts.formatear_precio(precio_min)} "
+            f"{quote}"
+        )
+    if precio_max is not None:
+        condiciones.append(
+            f"• Alza: precio ≥ {crypto_alerts.formatear_precio(precio_max)} "
+            f"{quote}"
+        )
+    modo = "constante hasta pulsar Detener" if constante else "aviso único"
+    rearme_texto = (
+        f"automático al {crypto_alerts.formatear_precio(rearme)}%"
+        if rearme is not None else "sin rearme automático"
+    )
     confirmacion = (
         f"✅ Criptoalerta {accion}\n\n"
         f"Mercado: {crypto_alerts.nombre_book(book)}\n"
-        f"Condición: Precio {simbolo} "
-        f"{crypto_alerts.formatear_precio(precio)} {quote}\n"
-        "Frecuencia: aproximadamente cada minuto\n"
-        "Fuente: Bitso (último precio negociado)\n\n"
-        "La alerta se enviará una sola vez cuando se cumpla la condición."
+        + "\n".join(condiciones)
+        + f"\nModo: {modo}\nRearme: {rearme_texto}\n"
+        "Fuente: último precio negociado en Bitso."
     )
-    message_id = datos.get("crypto_message_id")
     _mostrar_crypto_grid(
-        chat_id, confirmacion, [], message_id=message_id
+        chat_id,
+        confirmacion,
+        [],
+        message_id=datos.get("crypto_message_id"),
     )
     guardar_estado(chat_id, "")
     conversaciones.pop(chat_id, None)
@@ -711,12 +970,19 @@ def _mostrar_lista_criptoalertas(chat_id, pagina=0):
     filas = []
     for alerta in alertas[inicio:inicio + CRIPTO_POR_PAGINA]:
         icono = "🟢" if alerta.get("estado") == "activa" else "✅"
-        simbolo = "≥" if alerta.get("operador") == "gte" else "≤"
+        limites = []
+        if alerta.get("precio_min") is not None:
+            limites.append(
+                f"≤ {crypto_alerts.formatear_precio(alerta['precio_min'])}"
+            )
+        if alerta.get("precio_max") is not None:
+            limites.append(
+                f"≥ {crypto_alerts.formatear_precio(alerta['precio_max'])}"
+            )
         filas.append([{
             "texto": (
                 f"{icono} {crypto_alerts.nombre_book(alerta['book'])} "
-                f"{simbolo} "
-                f"{crypto_alerts.formatear_precio(alerta['precio_objetivo'])}"
+                + " · ".join(limites)
             ),
             "data": f"crypto_detail:{alerta['id']}",
         }])
@@ -761,13 +1027,31 @@ def _mostrar_detalle_criptoalerta(chat_id, alerta_id):
     datos["crypto_alert_id"] = alerta["id"]
     conversaciones[chat_id]["estado"] = ESTADO_CRIPTO_DETALLE
     conversaciones[chat_id]["wait_callback"] = True
-    simbolo = "≥" if alerta["operador"] == "gte" else "≤"
     quote = alerta["book"].split("_", 1)[-1].upper()
     estado = (
         "Activa" if alerta.get("estado") == "activa" else "Disparada"
     )
+    condiciones = []
+    if alerta.get("precio_min") is not None:
+        condiciones.append(
+            f"• Baja: precio ≤ "
+            f"{crypto_alerts.formatear_precio(alerta['precio_min'])} {quote}"
+        )
+    if alerta.get("precio_max") is not None:
+        condiciones.append(
+            f"• Alza: precio ≥ "
+            f"{crypto_alerts.formatear_precio(alerta['precio_max'])} {quote}"
+        )
+    modo = (
+        "Constante" if alerta.get("aviso_constante") else "Aviso único"
+    )
+    rearme = alerta.get("rearme_porcentaje")
+    rearme_texto = (
+        f"{crypto_alerts.formatear_precio(rearme)}%"
+        if rearme is not None else "No automático"
+    )
     filas = [[{
-        "texto": "✏️ Editar condición",
+        "texto": "✏️ Editar alerta",
         "data": f"crypto_edit:{alerta['id']}",
     }]]
     if alerta.get("estado") == "disparada":
@@ -786,9 +1070,10 @@ def _mostrar_detalle_criptoalerta(chat_id, alerta_id):
     mensaje = (
         f"💎 Criptoalerta #{alerta['id']}\n\n"
         f"Mercado: {crypto_alerts.nombre_book(alerta['book'])}\n"
-        f"Condición: Precio {simbolo} "
-        f"{crypto_alerts.formatear_precio(alerta['precio_objetivo'])} "
-        f"{quote}\n"
+        + "\n".join(condiciones)
+        + "\n"
+        f"Modo: {modo}\n"
+        f"Rearme: {rearme_texto}\n"
         f"Estado: {estado}\n"
         "Fuente: Bitso (último precio negociado)"
     )
@@ -1431,6 +1716,12 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_CRIPTO_BOOK,
             ESTADO_CRIPTO_OPERADOR,
             ESTADO_CRIPTO_PRECIO,
+            ESTADO_CRIPTO_BANDA,
+            ESTADO_CRIPTO_PRECIO_MIN,
+            ESTADO_CRIPTO_PRECIO_MAX,
+            ESTADO_CRIPTO_MODO,
+            ESTADO_CRIPTO_REARME,
+            ESTADO_CRIPTO_REARME_CUSTOM,
             ESTADO_CRIPTO_LISTA,
             ESTADO_CRIPTO_DETALLE,
         ]:
@@ -1501,13 +1792,52 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             return _seleccionar_crypto_book(chat_id, texto.split(":", 1)[1])
         return _seleccionar_crypto_book(chat_id, texto)
 
-    if estado_actual == ESTADO_CRIPTO_OPERADOR:
-        if texto.startswith("crypto_op:"):
-            return _pedir_precio_crypto(chat_id, texto.split(":", 1)[1])
-        return "Selecciona si el precio debe subir o bajar hasta el objetivo."
+    if estado_actual == ESTADO_CRIPTO_BANDA:
+        if texto.startswith("crypto_set:"):
+            return _pedir_limite_crypto(chat_id, texto.split(":", 1)[1])
+        if texto.startswith("crypto_remove:"):
+            lado = texto.split(":", 1)[1]
+            if lado in ("min", "max"):
+                conversaciones[chat_id]["datos"].pop(
+                    f"crypto_precio_{lado}", None
+                )
+            return _mostrar_banda_crypto(chat_id)
+        if texto == "crypto_band_continue":
+            return _mostrar_modo_crypto(chat_id)
+        return ""
 
-    if estado_actual == ESTADO_CRIPTO_PRECIO:
-        return _guardar_precio_crypto(chat_id, texto)
+    if estado_actual in (ESTADO_CRIPTO_PRECIO_MIN, ESTADO_CRIPTO_PRECIO_MAX):
+        if texto == "crypto_band_back":
+            return _mostrar_banda_crypto(chat_id)
+        lado = "min" if estado_actual == ESTADO_CRIPTO_PRECIO_MIN else "max"
+        return _guardar_limite_crypto(chat_id, texto, lado)
+
+    if estado_actual == ESTADO_CRIPTO_MODO:
+        if texto.startswith("crypto_mode:"):
+            return _mostrar_rearme_crypto(chat_id, texto.split(":", 1)[1])
+        return ""
+
+    if estado_actual == ESTADO_CRIPTO_REARME:
+        if texto == "crypto_rearm:custom":
+            return _pedir_rearme_personalizado_crypto(chat_id)
+        if texto.startswith("crypto_rearm:"):
+            raw = texto.split(":", 1)[1]
+            rearme = None if raw == "none" else crypto_alerts.parsear_porcentaje(
+                raw
+            )
+            if raw != "none" and rearme is None:
+                return "No pude interpretar el porcentaje de rearme."
+            return _guardar_configuracion_crypto(chat_id, rearme)
+        return ""
+
+    if estado_actual == ESTADO_CRIPTO_REARME_CUSTOM:
+        rearme = crypto_alerts.parsear_porcentaje(texto)
+        if rearme is None:
+            return (
+                "Escribe un porcentaje mayor que 0 y de hasta 100, "
+                "por ejemplo: 7.5%."
+            )
+        return _guardar_configuracion_crypto(chat_id, rearme)
 
     # — GESTOR DE CRIPTOALERTAS —
     if estado_actual == ESTADO_CRIPTO_LISTA:
@@ -1548,8 +1878,25 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
                 conversaciones[chat_id]["datos"].update({
                     "crypto_edit_id": alerta_id,
                     "crypto_book": alerta["book"],
+                    "crypto_precio_min": (
+                        Decimal(str(alerta["precio_min"]))
+                        if alerta.get("precio_min") is not None else None
+                    ),
+                    "crypto_precio_max": (
+                        Decimal(str(alerta["precio_max"]))
+                        if alerta.get("precio_max") is not None else None
+                    ),
+                    "crypto_aviso_constante": bool(
+                        alerta.get("aviso_constante")
+                    ),
+                    "crypto_rearme_porcentaje": alerta.get(
+                        "rearme_porcentaje"
+                    ),
                 })
-                return _mostrar_operador_crypto(chat_id)
+                crypto_alerts.bitso_price_stream.suscribir(alerta["book"])
+                _mostrar_banda_crypto(chat_id)
+                _iniciar_actualizador_precio_crypto(chat_id)
+                return ""
             if texto.startswith("crypto_reactivate:"):
                 alerta_id = int(texto.split(":", 1)[1])
                 if crypto_alerts.reactivar_alerta(alerta_id, chat_id):
@@ -2698,6 +3045,30 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             )
         except (TypeError, ValueError):
             return "No pude identificar el recordatorio que deseas aplazar."
+
+    # El botón de una criptoalerta constante también es global: debe funcionar
+    # aunque el usuario esté dentro de otro menú.
+    if callback_data.startswith("crypto_stop:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            return "No pude identificar la criptoalerta."
+        if crypto_alerts.detener_alerta_constante(alerta_id, chat_id):
+            if id_callback:
+                editar_mensaje_con_grid(
+                    chat_id,
+                    id_callback,
+                    "🛑 Aviso constante detenido\n\n"
+                    "Esta criptoalerta dejó de insistir. Si configuraste "
+                    "rearme automático, volverá a quedar disponible cuando "
+                    "el precio se aleje del límite elegido.",
+                    [],
+                )
+            return ""
+        return (
+            "No pude detener esa criptoalerta. Puede que ya estuviera "
+            "detenida o que no pertenezca a tu cuenta."
+        )
 
     # Entradas globales desde /start: deben abrir un flujo nuevo aunque exista
     # otra conversación con botones pendiente.

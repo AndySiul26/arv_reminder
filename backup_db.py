@@ -66,8 +66,8 @@ def _asegurar_esquema_cripto(conn):
             chat_id TEXT NOT NULL,
             usuario TEXT,
             book TEXT NOT NULL,
-            operador TEXT NOT NULL,
-            precio_objetivo NUMERIC(38, 18) NOT NULL,
+            operador TEXT,
+            precio_objetivo NUMERIC(38, 18),
             estado TEXT NOT NULL,
             una_vez BOOLEAN DEFAULT TRUE,
             precio_disparo NUMERIC(38, 18),
@@ -76,6 +76,19 @@ def _asegurar_esquema_cripto(conn):
             creado_en TIMESTAMPTZ DEFAULT NOW(),
             actualizado_en TIMESTAMPTZ DEFAULT NOW()
         );
+        ALTER TABLE cripto_alertas
+            ALTER COLUMN operador DROP NOT NULL,
+            ALTER COLUMN precio_objetivo DROP NOT NULL;
+        ALTER TABLE cripto_alertas
+            ADD COLUMN IF NOT EXISTS precio_min NUMERIC(38, 18),
+            ADD COLUMN IF NOT EXISTS precio_max NUMERIC(38, 18),
+            ADD COLUMN IF NOT EXISTS min_armada BOOLEAN DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS max_armada BOOLEAN DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS aviso_constante BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS aviso_detenido BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS rearme_porcentaje NUMERIC(8, 4),
+            ADD COLUMN IF NOT EXISTS lado_disparado TEXT,
+            ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ;
     """)
     conn.commit()
 

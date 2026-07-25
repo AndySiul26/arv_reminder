@@ -267,6 +267,34 @@ def crear_tablas_criptoalertas(supabase: Client):
             actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        ALTER TABLE cripto_alertas
+            ALTER COLUMN operador DROP NOT NULL,
+            ALTER COLUMN precio_objetivo DROP NOT NULL;
+        ALTER TABLE cripto_alertas
+            ADD COLUMN IF NOT EXISTS precio_min NUMERIC(38, 18),
+            ADD COLUMN IF NOT EXISTS precio_max NUMERIC(38, 18),
+            ADD COLUMN IF NOT EXISTS min_armada BOOLEAN NOT NULL DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS max_armada BOOLEAN NOT NULL DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS aviso_constante BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS aviso_detenido BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS rearme_porcentaje NUMERIC(8, 4),
+            ADD COLUMN IF NOT EXISTS lado_disparado TEXT,
+            ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ;
+
+        UPDATE cripto_alertas
+        SET precio_min = precio_objetivo
+        WHERE precio_min IS NULL AND precio_max IS NULL
+          AND operador = 'lte';
+        UPDATE cripto_alertas
+        SET precio_max = precio_objetivo
+        WHERE precio_min IS NULL AND precio_max IS NULL
+          AND operador = 'gte';
+        UPDATE cripto_alertas
+        SET min_armada = (precio_min IS NOT NULL AND estado = 'activa'),
+            max_armada = (precio_max IS NOT NULL AND estado = 'activa')
+        WHERE lado_disparado IS NULL
+          AND ultima_notificacion_en IS NULL;
+
         CREATE INDEX IF NOT EXISTS idx_cripto_alertas_chat
             ON cripto_alertas (chat_id);
         CREATE INDEX IF NOT EXISTS idx_cripto_alertas_estado_book
