@@ -151,7 +151,7 @@ Las respuestas se envían directamente a la API HTTP de Telegram desde
 | `/recordatorio` | Inicia la creación de un recordatorio. |
 | `/recordatorios` | Abre el gestor para buscar, consultar y editar. |
 | `/buscar` | Busca por nombre, descripción o ID. |
-| `/criptoalerta` | Crea una alerta premium de precio basada en Bitso. |
+| `/criptoalerta` | Crea una alerta premium con Bitso y respaldo Coinbase Spot. |
 | `/criptoalertas` | Administra, edita, reactiva o elimina criptoalertas. |
 | `/pendientes` | Alias compatible que abre el gestor filtrado por pendientes. |
 | `/editar` | Alias compatible que abre el gestor principal. |
@@ -318,16 +318,21 @@ entre páginas. Las operaciones se aplican una fila a la vez en Supabase.
 
 `/criptoalerta` solicita:
 
-1. Mercado público de Bitso, por ejemplo `BTC/MXN`.
+1. Par de mercado, por ejemplo `BTC/MXN` o `FET/USD`.
 2. Límite inferior (`precio <= objetivo`), superior (`precio >= objetivo`) o
    ambos.
 3. Tipo de aviso: único o constante.
 4. Rearme: desactivado, 5%, 10%, 20% o porcentaje personalizado.
 
-La aplicación valida el mercado contra `available_books` y mantiene el último
-precio negociado (`last`) mediante el canal público `trades` de Bitso WebSocket.
-Durante la creación edita el mismo mensaje de Telegram cada 10 segundos; REST
-se utiliza como respaldo si todavía no existe un trade reciente. El monitor
+La aplicación usa Bitso como fuente principal. Valida el par contra
+`available_books` y mantiene el último precio negociado (`last`) mediante el
+canal público `trades` de Bitso WebSocket; REST cubre la ausencia de un trade
+reciente. Si Bitso no publica el par o falla su consulta, se intenta Coinbase
+Spot con exactamente el mismo activo base y la misma moneda cotizada. Nunca se
+sustituye silenciosamente USD por USDT, MXN por USD ni otra combinación.
+
+Durante la creación se edita el mismo mensaje de Telegram cada 10 segundos y
+se muestran el proveedor, el par consultado y el tipo de precio. El monitor
 agrupa todas las alertas por mercado para reutilizar el mismo precio.
 
 Cuando la condición se cumple, Telegram recibe el mercado, condición, objetivo,
@@ -344,9 +349,12 @@ precio retrocede el porcentaje configurado por debajo del objetivo; un límite
 inferior se arma cuando el precio sube ese porcentaje por encima del objetivo.
 Esto evita disparos continuos por pequeñas oscilaciones en el límite.
 
-Antes de consultar precios, el monitor contrasta las alertas activas con el
-catálogo actual de Bitso. Si Bitso retira un mercado, la alerta se desactiva y
-se informa al usuario una sola vez, en lugar de repetir errores indefinidamente.
+Un cambio de proveedor debe producir dos lecturas válidas consecutivas antes
+de que esa fuente pueda disparar una alerta. La fuente confirmada, el mercado,
+el tipo de precio y la hora del cambio quedan guardados en Supabase. Un timeout
+o error temporal conserva la alerta activa. Sólo se desactiva y se informa al
+usuario una vez cuando Bitso y Coinbase Spot confirman que no publican el par
+exacto.
 
 `/criptoalertas` permite consultar, editar la banda, el modo y el rearme,
 reactivar o eliminar alertas propias. Toda operación verifica simultáneamente
@@ -552,6 +560,9 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `BACKUP_PG_PASS` | Muy recomendable | Contraseña del respaldo. |
 | `BITSO_API_BASE_URL` | No | API pública; por defecto `https://bitso.com/api/v3`. |
 | `BITSO_TIMEOUT_SECONDS` | No | Tiempo máximo de cada consulta; por defecto 10 segundos. |
+| `COINBASE_API_BASE_URL` | No | Respaldo público; por defecto `https://api.coinbase.com/v2`. |
+| `COINBASE_TIMEOUT_SECONDS` | No | Tiempo máximo de Coinbase; por defecto 10 segundos. |
+| `CRYPTO_FALLBACK_CONFIRMATIONS` | No | Lecturas consecutivas para aceptar un cambio de fuente; mínimo 2. |
 | `CRYPTO_ALERT_INTERVAL_SECONDS` | No | Frecuencia del monitor; mínimo y valor predeterminado: 60 segundos. |
 
 Hay una inconsistencia heredada: `webhook_utils.py` busca

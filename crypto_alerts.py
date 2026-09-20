@@ -1,4 +1,4 @@
-"""Alertas de precio de criptoactivos usando la API pública de Bitso."""
+"""Alertas de precio con Bitso y respaldo exacto de Coinbase Spot."""
 
 from __future__ import annotations
 
@@ -28,6 +28,13 @@ BITSO_API_BASE_URL = os.getenv(
 ).rstrip("/")
 BITSO_WS_URL = os.getenv("BITSO_WS_URL", "wss://ws.bitso.com")
 BITSO_TIMEOUT_SECONDS = int(os.getenv("BITSO_TIMEOUT_SECONDS", "10"))
+COINBASE_API_BASE_URL = os.getenv(
+    "COINBASE_API_BASE_URL", "https://api.coinbase.com/v2"
+).rstrip("/")
+COINBASE_TIMEOUT_SECONDS = int(os.getenv("COINBASE_TIMEOUT_SECONDS", "10"))
+CRYPTO_FALLBACK_CONFIRMATIONS = max(
+    2, int(os.getenv("CRYPTO_FALLBACK_CONFIRMATIONS", "2"))
+)
 CRYPTO_ALERT_INTERVAL_SECONDS = max(
     60, int(os.getenv("CRYPTO_ALERT_INTERVAL_SECONDS", "60"))
 )
@@ -45,6 +52,14 @@ PREMIUM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_TEST_USER_ID", "")
 _db_local = threading.local()
 _books_lock = threading.Lock()
 _books_cache = {"books": [], "expires_at": 0.0}
+
+
+class MercadoNoDisponibleError(RuntimeError):
+    """Ninguna fuente configurada publica el par exacto solicitado."""
+
+
+class FuenteTemporalError(RuntimeError):
+    """Una fuente falló temporalmente; la alerta debe conservarse activa."""
 
 
 def _db():
@@ -129,6 +144,67 @@ def obtener_ticker_bitso(book):
         "bid": payload.get("bid"),
         "ask": payload.get("ask"),
         "source": "rest",
+        "provider": "bitso",
+        "provider_label": "Bitso",
+        "market": nombre_book(book),
+        "price_type": "último trade",
+        "fallback": False,
+    }
+
+
+def obtener_ticker_coinbase(book):
+    """Obtiene el spot de Coinbase sin sustituir la moneda cotizada."""
+    book = str(book).strip().lower()
+    base, separator, quote = book.partition("_")
+    if not separator or not base or not quote:
+        raise MercadoNoDisponibleError(f"Par inválido: {book}")
+    market = f"{base.upper()}-{quote.upper()}"
+    try:
+        response = requests.get(
+            f"{COINBASE_API_BASE_URL}/prices/{market}/spot",
+            headers={"User-Agent": "ARV-Reminder/4.0 crypto-alerts"},
+            timeout=COINBASE_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise FuenteTemporalError(
+            f"Coinbase Spot no respondió para {market}"
+        ) from exc
+    if response.status_code in (400, 404):
+        raise MercadoNoDisponibleError(
+            f"Coinbase Spot no publica {market}"
+        )
+    try:
+        response.raise_for_status()
+        payload = response.json().get("data") or {}
+    except (requests.RequestException, ValueError) as exc:
+        raise FuenteTemporalError(
+            f"Respuesta temporal inválida de Coinbase para {market}"
+        ) from exc
+    if (
+        str(payload.get("base", "")).upper() != base.upper()
+        or str(payload.get("currency", "")).upper() != quote.upper()
+    ):
+        raise MercadoNoDisponibleError(
+            f"Coinbase devolvió un par distinto de {market}"
+        )
+    try:
+        last = Decimal(str(payload["amount"]))
+    except (KeyError, InvalidOperation, TypeError) as exc:
+        raise FuenteTemporalError(
+            f"Precio inválido de Coinbase para {market}"
+        ) from exc
+    if last <= 0:
+        raise FuenteTemporalError(f"Precio no positivo para {market}")
+    return {
+        "book": book,
+        "last": last,
+        "created_at": _utc_now().isoformat(),
+        "source": "rest",
+        "provider": "coinbase",
+        "provider_label": "Coinbase Spot",
+        "market": nombre_book(book),
+        "price_type": "spot",
+        "fallback": True,
     }
 
 
@@ -294,6 +370,11 @@ class BitsoPriceStream:
                     "last": price,
                     "created_at": generated.isoformat(),
                     "source": "websocket",
+                    "provider": "bitso",
+                    "provider_label": "Bitso",
+                    "market": nombre_book(book),
+                    "price_type": "último trade",
+                    "fallback": False,
                 }
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
             print(f"[WARN] Mensaje de Bitso WS inválido: {exc}")
@@ -354,8 +435,37 @@ bitso_price_stream = BitsoPriceStream()
 
 
 def obtener_precio_actual(book, max_age_seconds=90):
-    """Precio compartido: WebSocket reciente y REST como respaldo."""
-    return bitso_price_stream.obtener(book, max_age_seconds=max_age_seconds)
+    """Consulta Bitso y, si el par no existe, Coinbase con el mismo par."""
+    book = str(book).strip().lower()
+    bitso_unavailable = False
+    try:
+        bitso_unavailable = book not in set(obtener_libros_bitso())
+    except Exception as exc:
+        # Si falla solamente el catálogo, todavía se intenta el ticker.
+        print(f"[WARN] No se pudo validar catálogo Bitso: {exc}")
+
+    if not bitso_unavailable:
+        try:
+            return bitso_price_stream.obtener(
+                book, max_age_seconds=max_age_seconds
+            )
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status not in (400, 404):
+                print(f"[WARN] Fallo temporal de Bitso para {book}: {exc}")
+        except Exception as exc:
+            print(f"[WARN] Fallo temporal de Bitso para {book}: {exc}")
+
+    try:
+        return obtener_ticker_coinbase(book)
+    except MercadoNoDisponibleError as exc:
+        if bitso_unavailable:
+            raise MercadoNoDisponibleError(
+                f"Ni Bitso ni Coinbase Spot publican {nombre_book(book)}"
+            ) from exc
+        raise FuenteTemporalError(
+            f"Bitso falló temporalmente y Coinbase no publica {nombre_book(book)}"
+        ) from exc
 
 
 def es_usuario_premium(chat_id):
@@ -402,6 +512,13 @@ def normalizar_alerta(alerta):
     )
     alerta["aviso_constante"] = bool(alerta.get("aviso_constante", False))
     alerta["aviso_detenido"] = bool(alerta.get("aviso_detenido", False))
+    alerta["fuente_actual"] = alerta.get("fuente_actual") or (
+        alerta.get("fuente")
+        if alerta.get("fuente") in ("bitso", "coinbase") else "bitso"
+    )
+    alerta["lecturas_fuente_candidata"] = int(
+        alerta.get("lecturas_fuente_candidata") or 0
+    )
     return alerta
 
 
@@ -452,6 +569,12 @@ def crear_alerta_banda(
         "precio_disparo": None,
         "disparada_en": None,
         "fuente": "bitso",
+        "fuente_actual": None,
+        "mercado_fuente": None,
+        "tipo_precio": None,
+        "fuente_candidata": None,
+        "lecturas_fuente_candidata": 0,
+        "fuente_cambio_en": None,
     }
     try:
         response = client.table("cripto_alertas").insert(data).execute()
@@ -542,6 +665,8 @@ def reactivar_alerta(alerta_id, chat_id):
             "ultima_notificacion_en": None,
             "precio_disparo": None,
             "disparada_en": None,
+            "fuente_candidata": None,
+            "lecturas_fuente_candidata": 0,
         },
         chat_id=chat_id,
     ))
@@ -582,6 +707,8 @@ def actualizar_alerta_banda(
             "estado": "activa",
             "precio_disparo": None,
             "disparada_en": None,
+            "fuente_candidata": None,
+            "lecturas_fuente_candidata": 0,
         },
         chat_id=chat_id,
     )
@@ -740,6 +867,62 @@ def _debe_repetir(alerta, precio, ahora):
     )
 
 
+def _confirmar_fuente(alerta, ticker, ahora=None):
+    """Exige lecturas consecutivas antes de aceptar un proveedor distinto."""
+    ahora = ahora or _utc_now()
+    provider = ticker.get("provider") or "bitso"
+    actual = alerta.get("fuente_actual") or alerta.get("fuente")
+    metadata = {
+        "mercado_fuente": ticker.get("market") or nombre_book(alerta["book"]),
+        "tipo_precio": ticker.get("price_type") or "último trade",
+    }
+    if actual == provider:
+        cambios = {}
+        if alerta.get("fuente_candidata") or alerta.get(
+            "lecturas_fuente_candidata"
+        ):
+            cambios.update({
+                "fuente_candidata": None,
+                "lecturas_fuente_candidata": 0,
+            })
+        if cambios:
+            alerta = _actualizar_alerta(alerta["id"], cambios) or alerta
+        return True, False, alerta
+
+    candidate = alerta.get("fuente_candidata")
+    count = (
+        int(alerta.get("lecturas_fuente_candidata") or 0) + 1
+        if candidate == provider else 1
+    )
+    if count < CRYPTO_FALLBACK_CONFIRMATIONS:
+        _actualizar_alerta(alerta["id"], {
+            "fuente_candidata": provider,
+            "lecturas_fuente_candidata": count,
+            **metadata,
+        })
+        return False, False, alerta
+
+    cambios = {
+        "fuente_actual": provider,
+        "fuente": provider,
+        "fuente_candidata": None,
+        "lecturas_fuente_candidata": 0,
+        "fuente_cambio_en": ahora.isoformat(),
+        **metadata,
+    }
+    alerta = _actualizar_alerta(alerta["id"], cambios) or {
+        **alerta, **cambios
+    }
+    return True, True, alerta
+
+
+def _descripcion_fuente(ticker):
+    return (
+        ticker.get("provider_label")
+        or ("Coinbase Spot" if ticker.get("provider") == "coinbase" else "Bitso")
+    )
+
+
 def _mensaje_alerta(alerta, ticker, lado, repeticion=False):
     book = alerta["book"]
     quote = book.split("_", 1)[-1].upper()
@@ -760,8 +943,11 @@ def _mensaje_alerta(alerta, ticker, lado, repeticion=False):
         f"🎯 Condición: Precio {simbolo} "
         f"{formatear_precio(objetivo_raw)} {quote}\n"
         f"💰 Precio detectado: {formatear_precio(ticker['last'])} {quote}\n"
-        f"🕐 Dato de Bitso: {ticker.get('created_at') or 'sin fecha'}\n\n"
-        "Fuente: último precio negociado en Bitso. Esta alerta es "
+        f"🏦 Fuente: {_descripcion_fuente(ticker)}\n"
+        f"📊 Par consultado: {ticker.get('market') or nombre_book(book)}\n"
+        f"📍 Tipo de precio: {ticker.get('price_type') or 'último trade'}\n"
+        f"🕐 Consultado: {ticker.get('created_at') or 'sin fecha'}\n\n"
+        "Se consultó el mismo par y la misma moneda configurados. Esta alerta es "
         "informativa y no constituye asesoría financiera."
     )
 
@@ -769,10 +955,10 @@ def _mensaje_alerta(alerta, ticker, lado, repeticion=False):
 def _mensaje_mercado_no_disponible(alerta):
     return (
         "⚠️ CRIPTOALERTA DESACTIVADA\n\n"
-        f"Bitso ya no publica el mercado {nombre_book(alerta['book'])}. "
-        "La alerta fue desactivada para evitar consultas fallidas cada "
-        "minuto. Puedes crear otra con uno de los mercados disponibles "
-        "desde /criptoalerta."
+        f"Ni Bitso ni Coinbase Spot publican el par exacto "
+        f"{nombre_book(alerta['book'])}. La alerta se desactivó porque no "
+        "hay una fuente válida; nunca se sustituye USD por USDT ni otra moneda. "
+        "Puedes crear otra desde /criptoalerta."
     )
 
 
@@ -839,6 +1025,10 @@ class MonitorCriptoAlertas:
             "precio_disparo": str(ticker["last"]),
             "disparada_en": ahora.isoformat(),
             "aviso_detenido": False,
+            "fuente_actual": ticker.get("provider") or "bitso",
+            "fuente": ticker.get("provider") or "bitso",
+            "mercado_fuente": ticker.get("market") or nombre_book(alerta["book"]),
+            "tipo_precio": ticker.get("price_type") or "último trade",
         }
         otro_armado = (
             alerta.get("max_armada") if lado == "min"
@@ -874,7 +1064,6 @@ class MonitorCriptoAlertas:
         for alerta in alertas:
             book = alerta["book"].lower()
             por_book.setdefault(book, []).append(normalizar_alerta(alerta))
-            bitso_price_stream.suscribir(book)
 
         selected_books = self._books_del_ciclo(list(por_book))
         disparadas = 0
@@ -882,11 +1071,17 @@ class MonitorCriptoAlertas:
         try:
             books_disponibles = set(obtener_libros_bitso())
         except Exception as exc:
-            # Una caída temporal del catálogo no debe desactivar alertas.
             print(f"[WARN] No se pudo validar catálogo Bitso: {exc}")
             books_disponibles = None
+        if books_disponibles is not None:
+            for book in selected_books:
+                if book in books_disponibles:
+                    bitso_price_stream.suscribir(book)
         for book in selected_books:
-            if books_disponibles is not None and book not in books_disponibles:
+            try:
+                ticker = obtener_precio_actual(book)
+            except MercadoNoDisponibleError as exc:
+                print(f"[WARN] Mercado sin fuente válida {book}: {exc}")
                 for alerta in por_book[book]:
                     response = enviar_mensaje_con_grid(
                         alerta["chat_id"],
@@ -903,13 +1098,28 @@ class MonitorCriptoAlertas:
                             },
                         )
                 continue
-            try:
-                ticker = obtener_precio_actual(book)
             except Exception as exc:
-                print(f"[WARN] Bitso no respondió para {book}: {exc}")
+                print(
+                    f"[WARN] Fuentes temporalmente no disponibles para "
+                    f"{book}: {exc}"
+                )
                 continue
 
             for alerta in por_book[book]:
+                confirmada, cambio_fuente, alerta = _confirmar_fuente(
+                    alerta, ticker, ahora
+                )
+                if not confirmada:
+                    print(
+                        f"[INFO] Confirmando fuente "
+                        f"{_descripcion_fuente(ticker)} para {book}"
+                    )
+                    continue
+                if cambio_fuente:
+                    print(
+                        f"[INFO] Criptoalerta {alerta.get('id')} cambió a "
+                        f"{_descripcion_fuente(ticker)} ({nombre_book(book)})"
+                    )
                 cambios_rearme = _aplicar_rearme(alerta, ticker["last"])
                 if cambios_rearme:
                     updated = _actualizar_alerta(

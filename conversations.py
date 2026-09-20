@@ -563,7 +563,8 @@ def iniciar_criptoalerta(chat_id, nombre_usuario, message_id=None):
     _mostrar_crypto_grid(
         chat_id,
         "💎 Criptoalerta Premium\n\n"
-        "Selecciona un mercado de Bitso o escribe otro, por ejemplo: "
+        "Selecciona un mercado o escribe otro. Se consulta Bitso y, si no "
+        "lo publica, Coinbase Spot con el mismo par; por ejemplo: "
         "BTC/USD, ETH/BTC o PEPE/MXN.",
         filas,
         message_id,
@@ -584,23 +585,36 @@ def _normalizar_book(texto):
 
 def _seleccionar_crypto_book(chat_id, book):
     book = _normalizar_book(book)
+    if "_" not in book:
+        return "Escribe un par válido, por ejemplo BTC/MXN."
+    books = []
     try:
         books = crypto_alerts.obtener_libros_bitso()
     except Exception as exc:
-        print(f"[ERROR] No se pudieron cargar mercados Bitso: {exc}")
-        return "Bitso no está disponible en este momento. Intenta más tarde."
+        print(f"[WARN] No se pudieron cargar mercados Bitso: {exc}")
 
     if book not in books:
-        conversaciones[chat_id]["wait_callback"] = False
-        return (
-            "Ese mercado no está disponible en Bitso. Escribe un par válido, "
-            "por ejemplo BTC/MXN."
-        )
+        try:
+            ticker = crypto_alerts.obtener_ticker_coinbase(book)
+            conversaciones[chat_id]["datos"]["crypto_ticker"] = ticker
+        except crypto_alerts.MercadoNoDisponibleError:
+            conversaciones[chat_id]["wait_callback"] = False
+            return (
+                "Ese par exacto no está disponible ni en Bitso ni en "
+                "Coinbase Spot. Escribe otro, por ejemplo BTC/MXN."
+            )
+        except Exception as exc:
+            print(f"[WARN] No se pudo validar {book} en Coinbase: {exc}")
+            return (
+                "Las fuentes de mercado no están disponibles en este "
+                "momento. Intenta de nuevo más tarde."
+            )
 
     datos = conversaciones[chat_id]["datos"]
     datos["crypto_book"] = book
-    crypto_alerts.bitso_price_stream.iniciar()
-    crypto_alerts.bitso_price_stream.suscribir(book)
+    if book in books:
+        crypto_alerts.bitso_price_stream.iniciar()
+        crypto_alerts.bitso_price_stream.suscribir(book)
     _mostrar_banda_crypto(chat_id)
     _iniciar_actualizador_precio_crypto(chat_id)
     return ""
@@ -630,6 +644,18 @@ def _texto_banda_crypto(chat_id, ticker=None, instruccion=None):
         if ticker and ticker.get("last") is not None
         else "temporalmente no disponible"
     )
+    fuente = (
+        crypto_alerts._descripcion_fuente(ticker)
+        if ticker else "temporalmente no disponible"
+    )
+    mercado = (
+        ticker.get("market") or crypto_alerts.nombre_book(book)
+        if ticker else crypto_alerts.nombre_book(book)
+    )
+    tipo_precio = (
+        ticker.get("price_type") or "sin identificar"
+        if ticker else "sin identificar"
+    )
     precio_min = datos.get("crypto_precio_min")
     precio_max = datos.get("crypto_precio_max")
     inferior = (
@@ -645,6 +671,9 @@ def _texto_banda_crypto(chat_id, ticker=None, instruccion=None):
         f"📉 Límite inferior: {inferior}\n"
         f"💰 Precio actual: {actual}\n"
         f"📈 Límite superior: {superior}\n\n"
+        f"🏦 Fuente: {fuente}\n"
+        f"📊 Par consultado: {mercado}\n"
+        f"📍 Tipo de precio: {tipo_precio}\n\n"
         "El precio actual se actualiza en este mismo mensaje cada "
         f"{CRYPTO_LIVE_UPDATE_SECONDS} segundos."
     )
@@ -922,7 +951,7 @@ def _guardar_configuracion_crypto(chat_id, rearme):
         f"Mercado: {crypto_alerts.nombre_book(book)}\n"
         + "\n".join(condiciones)
         + f"\nModo: {modo}\nRearme: {rearme_texto}\n"
-        "Fuente: último precio negociado en Bitso."
+        "Fuentes: Bitso (principal) → Coinbase Spot (respaldo exacto)."
     )
     _mostrar_crypto_grid(
         chat_id,
@@ -1075,7 +1104,11 @@ def _mostrar_detalle_criptoalerta(chat_id, alerta_id):
         f"Modo: {modo}\n"
         f"Rearme: {rearme_texto}\n"
         f"Estado: {estado}\n"
-        "Fuente: Bitso (último precio negociado)"
+        f"Fuente actual: "
+        f"{'Coinbase Spot' if alerta.get('fuente_actual') == 'coinbase' else 'Bitso'}\n"
+        f"Par consultado: "
+        f"{alerta.get('mercado_fuente') or crypto_alerts.nombre_book(alerta['book'])}\n"
+        f"Tipo de precio: {alerta.get('tipo_precio') or 'último trade'}"
     )
     _mostrar_crypto_grid(chat_id, mensaje, filas)
     return ""
@@ -1783,7 +1816,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             conversaciones[chat_id]["wait_callback"] = False
             _mostrar_crypto_grid(
                 chat_id,
-                "💎 Escribe el mercado de Bitso que deseas vigilar.\n\n"
+                "💎 Escribe el mercado que deseas vigilar.\n\n"
+                "Se usará Bitso o Coinbase Spot sin cambiar la moneda.\n"
                 "Ejemplos: BTC/MXN, ETH/USD, SOL/MXN.",
                 [],
             )

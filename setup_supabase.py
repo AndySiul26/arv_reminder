@@ -279,7 +279,13 @@ def crear_tablas_criptoalertas(supabase: Client):
             ADD COLUMN IF NOT EXISTS aviso_detenido BOOLEAN NOT NULL DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS rearme_porcentaje NUMERIC(8, 4),
             ADD COLUMN IF NOT EXISTS lado_disparado TEXT,
-            ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ;
+            ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS fuente_actual TEXT,
+            ADD COLUMN IF NOT EXISTS mercado_fuente TEXT,
+            ADD COLUMN IF NOT EXISTS tipo_precio TEXT,
+            ADD COLUMN IF NOT EXISTS fuente_candidata TEXT,
+            ADD COLUMN IF NOT EXISTS lecturas_fuente_candidata INTEGER NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS fuente_cambio_en TIMESTAMPTZ;
 
         UPDATE cripto_alertas
         SET precio_min = precio_objetivo

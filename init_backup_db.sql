@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS cripto_alertas (
     lado_disparado TEXT,
     ultima_notificacion_en TIMESTAMPTZ,
     fuente TEXT,
+    fuente_actual TEXT,
+    mercado_fuente TEXT,
+    tipo_precio TEXT,
+    fuente_candidata TEXT,
+    lecturas_fuente_candidata INTEGER DEFAULT 0,
+    fuente_cambio_en TIMESTAMPTZ,
     creado_en TIMESTAMPTZ DEFAULT NOW(),
     actualizado_en TIMESTAMPTZ DEFAULT NOW()
 );

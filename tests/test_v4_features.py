@@ -271,7 +271,7 @@ class CryptoMonitorTests(unittest.TestCase):
     @patch("crypto_alerts._actualizar_alerta")
     @patch("crypto_alerts.enviar_mensaje_con_grid")
     @patch("crypto_alerts.listar_alertas_activas")
-    def test_delisted_market_is_disabled_without_requesting_ticker(
+    def test_market_is_disabled_only_after_all_sources_reject_it(
         self,
         list_active,
         send_grid,
@@ -287,10 +287,13 @@ class CryptoMonitorTests(unittest.TestCase):
             "max_armada": True,
         }]
         send_grid.return_value = Mock(status_code=200)
+        get_price.side_effect = crypto_alerts.MercadoNoDisponibleError(
+            "sin fuente"
+        )
 
         crypto_alerts.MonitorCriptoAlertas().verificar_una_vez()
 
-        get_price.assert_not_called()
+        get_price.assert_called_once_with("fet_usd")
         update_alert.assert_called_once()
         self.assertEqual(
             update_alert.call_args.args[1]["lado_disparado"],
@@ -367,6 +370,64 @@ class CryptoMonitorTests(unittest.TestCase):
         )
         self.assertIn("Precio ≥ 100", message)
         self.assertIn("Precio detectado: 101", message)
+        self.assertIn("Fuente: Bitso", message)
+
+    @patch("crypto_alerts._actualizar_alerta")
+    def test_provider_switch_requires_two_consecutive_readings(self, update):
+        alert = {
+            "id": 3,
+            "book": "fet_usd",
+            "fuente": "bitso",
+            "fuente_actual": "bitso",
+            "lecturas_fuente_candidata": 0,
+        }
+        ticker = {
+            "provider": "coinbase",
+            "provider_label": "Coinbase Spot",
+            "market": "FET/USD",
+            "price_type": "spot",
+        }
+        update.return_value = None
+        accepted, changed, _ = crypto_alerts._confirmar_fuente(alert, ticker)
+        self.assertFalse(accepted)
+        self.assertFalse(changed)
+        self.assertEqual(
+            update.call_args.args[1]["lecturas_fuente_candidata"], 1
+        )
+
+        alert.update({
+            "fuente_candidata": "coinbase",
+            "lecturas_fuente_candidata": 1,
+        })
+        accepted, changed, _ = crypto_alerts._confirmar_fuente(alert, ticker)
+        self.assertTrue(accepted)
+        self.assertTrue(changed)
+        self.assertEqual(update.call_args.args[1]["fuente_actual"], "coinbase")
+
+
+class CryptoProviderTests(unittest.TestCase):
+    @patch("crypto_alerts.obtener_ticker_coinbase")
+    @patch("crypto_alerts.obtener_libros_bitso", return_value=[])
+    def test_fallback_uses_coinbase_for_exact_pair(self, _books, coinbase):
+        coinbase.return_value = {
+            "book": "fet_usd",
+            "last": Decimal("0.17"),
+            "provider": "coinbase",
+        }
+        result = crypto_alerts.obtener_precio_actual("fet_usd")
+        coinbase.assert_called_once_with("fet_usd")
+        self.assertEqual(result["provider"], "coinbase")
+
+    @patch("crypto_alerts.requests.get")
+    def test_coinbase_rejects_a_different_quote_currency(self, get):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "data": {"base": "FET", "currency": "USDT", "amount": "1"}
+        }
+        response.raise_for_status.return_value = None
+        get.return_value = response
+        with self.assertRaises(crypto_alerts.MercadoNoDisponibleError):
+            crypto_alerts.obtener_ticker_coinbase("fet_usd")
 
 
 class BitsoStreamTests(unittest.TestCase):

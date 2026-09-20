@@ -86,9 +86,15 @@ def _asegurar_esquema_cripto(conn):
             ADD COLUMN IF NOT EXISTS max_armada BOOLEAN DEFAULT TRUE,
             ADD COLUMN IF NOT EXISTS aviso_constante BOOLEAN DEFAULT FALSE,
             ADD COLUMN IF NOT EXISTS aviso_detenido BOOLEAN DEFAULT FALSE,
-            ADD COLUMN IF NOT EXISTS rearme_porcentaje NUMERIC(8, 4),
-            ADD COLUMN IF NOT EXISTS lado_disparado TEXT,
-            ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ;
+              ADD COLUMN IF NOT EXISTS rearme_porcentaje NUMERIC(8, 4),
+              ADD COLUMN IF NOT EXISTS lado_disparado TEXT,
+              ADD COLUMN IF NOT EXISTS ultima_notificacion_en TIMESTAMPTZ,
+              ADD COLUMN IF NOT EXISTS fuente_actual TEXT,
+              ADD COLUMN IF NOT EXISTS mercado_fuente TEXT,
+              ADD COLUMN IF NOT EXISTS tipo_precio TEXT,
+              ADD COLUMN IF NOT EXISTS fuente_candidata TEXT,
+              ADD COLUMN IF NOT EXISTS lecturas_fuente_candidata INTEGER DEFAULT 0,
+              ADD COLUMN IF NOT EXISTS fuente_cambio_en TIMESTAMPTZ;
     """)
     conn.commit()
 
