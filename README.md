@@ -566,11 +566,8 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `CRYPTO_FALLBACK_CONFIRMATIONS` | No | Lecturas consecutivas para aceptar un cambio de fuente; mínimo 2. |
 | `CRYPTO_ALERT_INTERVAL_SECONDS` | No | Frecuencia del monitor; mínimo y valor predeterminado: 60 segundos. |
 
-Hay una inconsistencia heredada: `webhook_utils.py` busca
-`TELEGRAM_BOT_TOKEN`, mientras el resto del sistema usa `TELEGRAM_TOKEN`.
-El arranque Docker no depende de esa variable antigua porque `entrypoint.sh`
-registra el webhook directamente con `TELEGRAM_TOKEN`. Las herramientas locales
-basadas en `webhook_utils.py` sí pueden requerir corregir esa diferencia.
+Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
+y callbacks, y aceptan `TELEGRAM_TOKEN` como variable principal.
 
 ## Instalación en un VPS de Hostinger
 

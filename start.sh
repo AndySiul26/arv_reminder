@@ -13,7 +13,9 @@ python setup_supabase.py
 PROJECT_NAME=$(echo "$PROJECT_DOMAIN" | tr - _)
 WEBHOOK_URL="https://${PROJECT_DOMAIN}.glitch.me/webhook"
 echo "Configurando webhook en: $WEBHOOK_URL"
-curl -F "url=$WEBHOOK_URL" https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook
+curl -F "url=$WEBHOOK_URL" \
+     -F 'allowed_updates=["message","callback_query"]' \
+     https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook
 
 # Iniciar la aplicación con Gunicorn
 # gunicorn --bind 0.0.0.0:3000 --workers 1 --threads 8 app:app

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def set_webhook(webhook_url=None):
@@ -19,9 +19,12 @@ def set_webhook(webhook_url=None):
         
         print(f"Usando URL: {webhook_url}")
         
-        response = requests.get(
+        response = requests.post(
             f"{BASE_URL}/setWebhook",
-            params={"url": webhook_url},
+            data={
+                "url": webhook_url,
+                "allowed_updates": '["message","callback_query"]',
+            },
             timeout=10
         )
         
