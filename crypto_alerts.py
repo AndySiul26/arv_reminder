@@ -766,6 +766,16 @@ def _mensaje_alerta(alerta, ticker, lado, repeticion=False):
     )
 
 
+def _mensaje_mercado_no_disponible(alerta):
+    return (
+        "⚠️ CRIPTOALERTA DESACTIVADA\n\n"
+        f"Bitso ya no publica el mercado {nombre_book(alerta['book'])}. "
+        "La alerta fue desactivada para evitar consultas fallidas cada "
+        "minuto. Puedes crear otra con uno de los mercados disponibles "
+        "desde /criptoalerta."
+    )
+
+
 class MonitorCriptoAlertas:
     def __init__(self, interval_seconds=CRYPTO_ALERT_INTERVAL_SECONDS):
         self.interval_seconds = max(60, int(interval_seconds))
@@ -869,7 +879,30 @@ class MonitorCriptoAlertas:
         selected_books = self._books_del_ciclo(list(por_book))
         disparadas = 0
         ahora = _utc_now()
+        try:
+            books_disponibles = set(obtener_libros_bitso())
+        except Exception as exc:
+            # Una caída temporal del catálogo no debe desactivar alertas.
+            print(f"[WARN] No se pudo validar catálogo Bitso: {exc}")
+            books_disponibles = None
         for book in selected_books:
+            if books_disponibles is not None and book not in books_disponibles:
+                for alerta in por_book[book]:
+                    response = enviar_mensaje_con_grid(
+                        alerta["chat_id"],
+                        _mensaje_mercado_no_disponible(alerta),
+                        [],
+                    )
+                    if response and response.status_code == 200:
+                        _actualizar_alerta(
+                            alerta["id"],
+                            {
+                                "estado": "disparada",
+                                "lado_disparado": "mercado_no_disponible",
+                                "aviso_detenido": True,
+                            },
+                        )
+                continue
             try:
                 ticker = obtener_precio_actual(book)
             except Exception as exc:

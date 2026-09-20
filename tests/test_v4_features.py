@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -149,6 +150,7 @@ class CryptoPriceTests(unittest.TestCase):
 
 
 class CryptoMonitorTests(unittest.TestCase):
+    @patch("crypto_alerts.obtener_libros_bitso", return_value=["btc_mxn"])
     @patch("crypto_alerts._actualizar_alerta")
     @patch("crypto_alerts.enviar_mensaje_con_grid")
     @patch("crypto_alerts.obtener_precio_actual")
@@ -159,6 +161,7 @@ class CryptoMonitorTests(unittest.TestCase):
         get_price,
         send_grid,
         update_alert,
+        get_books,
     ):
         list_active.return_value = [
             {
@@ -195,6 +198,7 @@ class CryptoMonitorTests(unittest.TestCase):
         self.assertEqual(update_alert.call_count, 2)
         self.assertEqual(result["disparadas"], 2)
 
+    @patch("crypto_alerts.obtener_libros_bitso", return_value=["btc_mxn"])
     @patch("crypto_alerts._actualizar_alerta")
     @patch("crypto_alerts.enviar_mensaje_con_grid")
     @patch("crypto_alerts.obtener_precio_actual")
@@ -205,6 +209,7 @@ class CryptoMonitorTests(unittest.TestCase):
         get_price,
         send_grid,
         update_alert,
+        get_books,
     ):
         list_active.return_value = [{
             "id": 1,
@@ -227,6 +232,7 @@ class CryptoMonitorTests(unittest.TestCase):
         update_alert.assert_not_called()
         self.assertEqual(result["disparadas"], 0)
 
+    @patch("crypto_alerts.obtener_libros_bitso", return_value=["btc_mxn"])
     @patch("crypto_alerts._actualizar_alerta")
     @patch("crypto_alerts.enviar_mensaje_con_grid")
     @patch("crypto_alerts.obtener_precio_actual")
@@ -237,6 +243,7 @@ class CryptoMonitorTests(unittest.TestCase):
         get_price,
         send_grid,
         update_alert,
+        get_books,
     ):
         list_active.return_value = [{
             "id": 1,
@@ -258,6 +265,37 @@ class CryptoMonitorTests(unittest.TestCase):
 
         update_alert.assert_not_called()
         self.assertEqual(result["disparadas"], 0)
+
+    @patch("crypto_alerts.obtener_libros_bitso", return_value=["btc_mxn"])
+    @patch("crypto_alerts.obtener_precio_actual")
+    @patch("crypto_alerts._actualizar_alerta")
+    @patch("crypto_alerts.enviar_mensaje_con_grid")
+    @patch("crypto_alerts.listar_alertas_activas")
+    def test_delisted_market_is_disabled_without_requesting_ticker(
+        self,
+        list_active,
+        send_grid,
+        update_alert,
+        get_price,
+        get_books,
+    ):
+        list_active.return_value = [{
+            "id": 3,
+            "chat_id": "42",
+            "book": "fet_usd",
+            "precio_max": "2",
+            "max_armada": True,
+        }]
+        send_grid.return_value = Mock(status_code=200)
+
+        crypto_alerts.MonitorCriptoAlertas().verificar_una_vez()
+
+        get_price.assert_not_called()
+        update_alert.assert_called_once()
+        self.assertEqual(
+            update_alert.call_args.args[1]["lado_disparado"],
+            "mercado_no_disponible",
+        )
 
     def test_lower_and_upper_rearm_use_hysteresis(self):
         lower = {
@@ -312,6 +350,23 @@ class CryptoMonitorTests(unittest.TestCase):
         self.assertFalse(crypto_alerts._debe_repetir(alert, "101", now))
         alert["aviso_detenido"] = True
         self.assertFalse(crypto_alerts._debe_repetir(alert, "101", now))
+
+    def test_trigger_message_keeps_condition_and_detected_price(self):
+        message = crypto_alerts._mensaje_alerta(
+            {
+                "book": "btc_mxn",
+                "precio_max": "100",
+                "precio_min": None,
+                "aviso_constante": False,
+            },
+            {
+                "last": Decimal("101"),
+                "created_at": "2026-09-20T00:00:00+00:00",
+            },
+            "max",
+        )
+        self.assertIn("Precio ≥ 100", message)
+        self.assertIn("Precio detectado: 101", message)
 
 
 class BitsoStreamTests(unittest.TestCase):
@@ -720,6 +775,53 @@ class SnoozeTests(unittest.TestCase):
 
         snooze.assert_called_once_with("42", 77, 20, 999)
 
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations._quitar_aviso_constante_guardado")
+    @patch("conversations.supabase_db.detener_aviso_constante")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    def test_stop_callback_targets_exact_reminder_before_open_flow(
+        self, upsert, stop_reminder, clear_saved, edit_grid
+    ):
+        conversations.conversaciones["42"] = {
+            "estado": conversations.ESTADO_NOMBRE_TAREA,
+            "datos": {},
+            "wait_callback": True,
+        }
+        stop_reminder.return_value = {
+            "id": 77,
+            "chat_id": "42",
+            "nombre_tarea": "Alarma",
+            "aviso_constante": True,
+        }
+        edit_grid.return_value = Mock(status_code=200)
+
+        response = conversations.procesar_callback(
+            "42", "stop_reminder:77", "Andy", "private", 999
+        )
+
+        self.assertEqual(response, "")
+        stop_reminder.assert_called_once_with(77, "42")
+        clear_saved.assert_called_once_with("42", 77)
+        edit_grid.assert_called_once()
+
+    @patch("conversations.detener_recordatorio_constante")
+    @patch("conversations.supabase_db.leer_estado_chat_id")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    def test_legacy_stop_button_resolves_its_original_reminder(
+        self, upsert, read_state, stop_reminder
+    ):
+        read_state.return_value = json.dumps({
+            "77": {"last_id_message": 999},
+            "88": {"last_id_message": 1000},
+        })
+        stop_reminder.return_value = ""
+
+        conversations.procesar_callback(
+            "42", "parar", "Andy", "private", 999
+        )
+
+        stop_reminder.assert_called_once_with("42", 77, 999)
+
 
 class ReminderButtonTests(unittest.TestCase):
     @patch("reminders.supabase_db.marcar_como_notificado")
@@ -768,6 +870,7 @@ class ReminderButtonTests(unittest.TestCase):
         )
         mark_notified.assert_called_once_with(25)
 
+    @patch("reminders.supabase_db.aviso_constante_sigue_activo")
     @patch("reminders.actualizar_estado_chat_id")
     @patch("reminders.supabase_db.marcar_como_notificado")
     @patch("reminders.enviar_mensaje_con_grid")
@@ -778,7 +881,9 @@ class ReminderButtonTests(unittest.TestCase):
         send_grid,
         mark_notified,
         save_state,
+        is_active,
     ):
+        is_active.return_value = True
         init_conversation.return_value = {
             "42": {
                 "datos": {"zona_horaria": "UTC"},
@@ -806,8 +911,36 @@ class ReminderButtonTests(unittest.TestCase):
         reminders.AdministradorRecordatorios()._enviar_recordatorio(record)
 
         rows = send_grid.call_args.args[2]
-        self.assertEqual(rows[-1][0]["data"], "parar")
+        self.assertEqual(rows[-1][0]["data"], "stop_reminder:26")
         mark_notified.assert_called_once_with(26)
+
+    @patch("reminders.supabase_db.aviso_constante_sigue_activo")
+    @patch("reminders.enviar_mensaje_con_grid")
+    @patch("reminders.conversations.inicializar_conversaciones")
+    def test_stopped_constant_is_rechecked_and_not_sent(
+        self, init_conversation, send_grid, is_active
+    ):
+        init_conversation.return_value = {
+            "42": {"datos": {"zona_horaria": "UTC"}}
+        }
+        is_active.return_value = False
+        record = {
+            "id": 26,
+            "chat_id": "42",
+            "usuario": "Andy",
+            "nombre_tarea": "Alarma",
+            "descripcion": "Constante",
+            "fecha_hora": "2026-07-24T12:00:00+00:00",
+            "aviso_constante": True,
+            "repetir": False,
+            "repeticion_creada": False,
+            "intervalo_repeticion": "",
+            "intervalos": 0,
+        }
+
+        reminders.AdministradorRecordatorios()._enviar_recordatorio(record)
+
+        send_grid.assert_not_called()
 
 
 if __name__ == "__main__":

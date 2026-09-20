@@ -344,6 +344,10 @@ precio retrocede el porcentaje configurado por debajo del objetivo; un límite
 inferior se arma cuando el precio sube ese porcentaje por encima del objetivo.
 Esto evita disparos continuos por pequeñas oscilaciones en el límite.
 
+Antes de consultar precios, el monitor contrasta las alertas activas con el
+catálogo actual de Bitso. Si Bitso retira un mercado, la alerta se desactiva y
+se informa al usuario una sola vez, en lugar de repetir errores indefinidamente.
+
 `/criptoalertas` permite consultar, editar la banda, el modo y el rearme,
 reactivar o eliminar alertas propias. Toda operación verifica simultáneamente
 el ID y el `chat_id`.

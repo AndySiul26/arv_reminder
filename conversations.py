@@ -2987,6 +2987,50 @@ def _detener_avisos_background(chat_id, message_id):
         editar_mensaje_texto(chat_id, message_id, "❌ Hubo un error al intentar detener los avisos.")
 
 
+def detener_recordatorio_constante(chat_id, recordatorio_id, message_id=None):
+    """Detiene únicamente el aviso constante asociado al botón pulsado."""
+    recordatorio = supabase_db.detener_aviso_constante(
+        recordatorio_id, chat_id
+    )
+    if not recordatorio:
+        return (
+            "No pude detener ese aviso. Puede que ya no exista o que no "
+            "pertenezca a tu cuenta."
+        )
+
+    _quitar_aviso_constante_guardado(chat_id, int(recordatorio_id))
+    nombre = recordatorio.get("nombre_tarea") or "recordatorio"
+    confirmacion = (
+        "✅ Aviso constante detenido\n\n"
+        f"Ya no volveré a insistir con: {nombre}."
+    )
+    if message_id:
+        respuesta = editar_mensaje_con_grid(
+            chat_id, message_id, confirmacion, []
+        )
+        if respuesta and respuesta.status_code == 200:
+            return ""
+    return confirmacion
+
+
+def _detener_desde_boton_legacy(chat_id, message_id):
+    """Resuelve botones ``parar`` antiguos al recordatorio que los originó."""
+    try:
+        guardados_raw = supabase_db.leer_estado_chat_id(
+            chat_id, CAMPO_GUARDADO_RECORDATORIO_AVISO_CONSTANTE
+        )
+        guardados = json.loads(guardados_raw) if guardados_raw else {}
+        for recordatorio_id, datos in guardados.items():
+            if str(datos.get("last_id_message")) == str(message_id):
+                return detener_recordatorio_constante(
+                    chat_id, int(recordatorio_id), message_id
+                )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"No se pudo resolver botón Detener antiguo: {exc}")
+    # Respaldo para mensajes demasiado antiguos que ya no están en el estado.
+    return detener_avisos(chat_id)
+
+
 # FUNCIÓN PRINCIPAL MODIFICADA
 def detener_avisos(chat_id):
     """
@@ -3045,6 +3089,21 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             )
         except (TypeError, ValueError):
             return "No pude identificar el recordatorio que deseas aplazar."
+
+    # Se procesa antes de cualquier estado conversacional. El ID evita que un
+    # botón viejo detenga otros avisos constantes del mismo usuario.
+    if callback_data.startswith("stop_reminder:"):
+        try:
+            recordatorio_id = int(callback_data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            return "No pude identificar el recordatorio que deseas detener."
+        return detener_recordatorio_constante(
+            chat_id, recordatorio_id, id_callback
+        )
+
+    # Compatibilidad con botones enviados por versiones anteriores.
+    if callback_data == "parar":
+        return _detener_desde_boton_legacy(chat_id, id_callback)
 
     # El botón de una criptoalerta constante también es global: debe funcionar
     # aunque el usuario esté dentro de otro menú.

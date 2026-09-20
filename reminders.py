@@ -142,6 +142,18 @@ class AdministradorRecordatorios:
             num = int(recordatorio.get("intervalos", 0))
             zona_horaria = conversaciones.get(chat_id,{}).get("datos",{}).get("zona_horaria","")
 
+            # La lista pendiente se obtiene al principio del ciclo. El usuario
+            # puede pulsar Detener después de esa lectura; se vuelve a consultar
+            # la fila justo antes de enviar para no revivir un aviso ya detenido.
+            if aviso_constante and not supabase_db.aviso_constante_sigue_activo(
+                recordatorio["id"], chat_id
+            ):
+                print(
+                    f"Aviso constante {recordatorio['id']} omitido: "
+                    "ya fue detenido."
+                )
+                return
+
             # Formatear fecha si existe
             fecha_hora_str = ""
             if recordatorio.get("fecha_hora"):
@@ -178,7 +190,10 @@ class AdministradorRecordatorios:
             ]
             if aviso_constante:
                 filas_aplazamiento.append([
-                    {"texto": "🛑 Detener avisos", "data": "parar"}
+                    {
+                        "texto": "🛑 Detener este aviso",
+                        "data": f"stop_reminder:{recordatorio_id}",
+                    }
                 ])
 
             ret = enviar_mensaje_con_grid(

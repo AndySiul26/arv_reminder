@@ -436,12 +436,12 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
     - chat_id: El identificador del usuario/chat.
     - estado: True o False (boolean) para activar o desactivar el aviso detenido.
     """
-    if not supabase:
-        if not inicializar_supabase():
-            return False
+    cliente = _obtener_cliente_supabase_por_hilo()
+    if not cliente:
+        return False
 
     try:
-        response = supabase.table("recordatorios") \
+        response = cliente.table("recordatorios") \
             .update({"aviso_detenido": estado}) \
             .eq("chat_id", str(chat_id)) \
             .eq("notificado", True) \
@@ -457,6 +457,60 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
 
     except Exception as e:
         print(f"Error al actualizar aviso_detenido para {chat_id}: {e}")
+        return False
+
+
+@con_reintentos(max_reintentos=3)
+def detener_aviso_constante(recordatorio_id, chat_id):
+    """Detiene una ocurrencia concreta, validando que pertenezca al chat."""
+    cliente = _obtener_cliente_supabase_por_hilo()
+    if not cliente:
+        return None
+    try:
+        response = (
+            cliente.table("recordatorios")
+            .update({"aviso_detenido": True})
+            .eq("id", int(recordatorio_id))
+            .eq("chat_id", str(chat_id))
+            .eq("aviso_constante", True)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(
+            f"Error al detener aviso constante {recordatorio_id} "
+            f"para {chat_id}: {e}"
+        )
+        return None
+
+
+@con_reintentos(max_reintentos=2)
+def aviso_constante_sigue_activo(recordatorio_id, chat_id):
+    """Relee el estado antes de cada envío para cerrar carreras con Detener."""
+    cliente = _obtener_cliente_supabase_por_hilo()
+    if not cliente:
+        return False
+    try:
+        response = (
+            cliente.table("recordatorios")
+            .select("aviso_constante,aviso_detenido")
+            .eq("id", int(recordatorio_id))
+            .eq("chat_id", str(chat_id))
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            return False
+        recordatorio = response.data[0]
+        return bool(
+            recordatorio.get("aviso_constante")
+            and not recordatorio.get("aviso_detenido")
+        )
+    except Exception as e:
+        print(
+            f"Error al verificar aviso constante {recordatorio_id} "
+            f"para {chat_id}: {e}"
+        )
         return False
 
 

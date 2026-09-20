@@ -10,6 +10,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+TELEGRAM_HTTP_TIMEOUT = (5, 15)
 
 
 def responder_callback_query(callback_query_id, texto=None):
@@ -114,7 +115,7 @@ def enviar_mensaje_texto(chat_id, mensaje, formato=None):
     }
     if formato:
         payload["parse_mode"] = formato
-    return requests.post(url, json=payload)
+    return requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
 
 def enviar_mensaje_con_botones(chat_id, mensaje, botones, formato=None):
     url = f"{BASE_URL}/sendMessage"
@@ -128,7 +129,7 @@ def enviar_mensaje_con_botones(chat_id, mensaje, botones, formato=None):
     }
     if formato:
         payload["parse_mode"] = formato
-    return requests.post(url, json=payload)
+    return requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
 
 def enviar_mensaje_con_grid(
     chat_id, mensaje, filas_botones, formato=None, counter_recursivity=0
@@ -149,7 +150,7 @@ def enviar_mensaje_con_grid(
     payload = {"chat_id": chat_id, "text": mensaje, "reply_markup": keyboard}
     if formato:
         payload["parse_mode"] = formato
-    ret = requests.post(url, json=payload)
+    ret = requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
     if ret.status_code != 200 and formato and counter_recursivity < 2:
         return enviar_mensaje_con_grid(
             chat_id,
@@ -184,7 +185,7 @@ def editar_mensaje_con_grid(
     }
     if formato:
         payload["parse_mode"] = formato
-    ret = requests.post(url, json=payload)
+    ret = requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
     if ret.status_code != 200 and formato and counter_recursivity < 2:
         return editar_mensaje_con_grid(
             chat_id,
@@ -206,7 +207,9 @@ def enviar_documento(chat_id, ruta, caption="", formato=None):
         }
         if formato:
             data["parse_mode"] = formato
-        return requests.post(url, data=data, files=files)
+        return requests.post(
+            url, data=data, files=files, timeout=TELEGRAM_HTTP_TIMEOUT
+        )
 
 def enviar_imagen(chat_id, ruta, caption="", formato=None):
     url = f"{BASE_URL}/sendPhoto"
@@ -218,7 +221,9 @@ def enviar_imagen(chat_id, ruta, caption="", formato=None):
         }
         if formato:
             data["parse_mode"] = formato
-        return requests.post(url, data=data, files=files)
+        return requests.post(
+            url, data=data, files=files, timeout=TELEGRAM_HTTP_TIMEOUT
+        )
 
 def guardar_diccionario(diccionario):
     nombre_archivo = "mi_diccionario.json"
@@ -244,7 +249,7 @@ def editar_mensaje_texto(chat_id, message_id, nuevo_texto, formato=None, guardar
         if formato:
             payload["parse_mode"] = formato
 
-        ret = requests.post(url, json=payload)
+        ret = requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
 
         if ret.status_code != 200 and counter_recursivity < 2:
             return editar_mensaje_texto(
@@ -307,7 +312,7 @@ def editar_mensaje_con_botones(chat_id, message_id, nuevo_mensaje, nuevos_botone
         if formato:
             payload["parse_mode"] = formato
 
-        ret = requests.post(url, json=payload)
+        ret = requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
 
         if ret.status_code != 200 and counter_recursivity < 2:
             return editar_mensaje_con_botones(
@@ -351,7 +356,7 @@ def editar_botones_mensaje(chat_id, message_id, nuevos_botones, guardar_datos=No
             "reply_markup": keyboard
         }
 
-        ret = requests.post(url, json=payload)
+        ret = requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
 
         if guardar_datos:
             guardar_datos(chat_id, ret)
@@ -370,4 +375,4 @@ def eliminar_mensaje(chat_id, message_id):
         "chat_id": chat_id,
         "message_id": message_id
     }
-    return requests.post(url, json=payload)
+    return requests.post(url, json=payload, timeout=TELEGRAM_HTTP_TIMEOUT)
