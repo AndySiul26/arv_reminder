@@ -40,6 +40,7 @@ else
     # We MUST upload the @cert.pem file for self-signed to work
     curl -F "url=$WEBHOOK_URL" \
          -F "certificate=@$CERT_FILE" \
+         -F 'allowed_updates=["message","callback_query"]' \
          "https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook"
          
     echo "" # New line

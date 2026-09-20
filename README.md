@@ -115,7 +115,8 @@ En producción, el flujo de arranque es:
 4. `entrypoint.sh` ejecuta `setup_supabase.py`.
 5. Se genera un certificado SSL autofirmado si no existe.
 6. El certificado se registra junto con `WEBHOOK_URL` mediante `setWebhook` de
-   Telegram.
+   Telegram, solicitando explícitamente actualizaciones `message` y
+   `callback_query`; esta última es indispensable para los botones inline.
 7. Gunicorn inicia Flask en el puerto `8443`.
 8. Al importar `app.py`, se valida la conexión real con Supabase leyendo
    `modo_tester`.
