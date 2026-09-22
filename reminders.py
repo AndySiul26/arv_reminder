@@ -132,6 +132,15 @@ class AdministradorRecordatorios:
         """Envía un recordatorio al usuario y, si es repetible, crea el siguiente."""
         try:
             chat_id = recordatorio["chat_id"]
+            recordatorio_id = recordatorio["id"]
+            if not supabase_db.reclamar_envio_recordatorio(
+                recordatorio_id, chat_id
+            ):
+                print(
+                    f"Recordatorio {recordatorio_id} omitido: otra instancia "
+                    "ya reservó este ciclo o el aviso fue detenido."
+                )
+                return
             print("Buscando ", chat_id, " en las conversaciones... (Envio de recordatorio)")
             conversaciones = conversations.inicializar_conversaciones(chat_id=chat_id, nombre_usuario=recordatorio.get("usuario",""))
             
@@ -174,7 +183,6 @@ class AdministradorRecordatorios:
             mensaje += fecha_hora_str
 
             # Enviar con opciones de aplazamiento para avisos normales y constantes.
-            recordatorio_id = recordatorio["id"]
             filas_aplazamiento = [
                 [
                     {"texto": "⏳ 5 min", "data": f"snooze:{recordatorio_id}:5"},
@@ -202,6 +210,12 @@ class AdministradorRecordatorios:
                 filas_aplazamiento,
                 formato="Markdown",
             )
+            if not ret or ret.status_code != 200:
+                print(
+                    f"Telegram no confirmó el recordatorio {recordatorio_id}; "
+                    "se reintentará en otro ciclo."
+                )
+                return
 
             # RECORDATORIOS DE AVISO CONSTANTE, SE EDITARAN ESOS MENSAJES CUANDO SE DETENGAN 
             try:

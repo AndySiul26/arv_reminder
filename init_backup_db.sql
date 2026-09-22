@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS recordatorios (
     repetir BOOLEAN DEFAULT FALSE,
     intervalo_repeticion TEXT,
     intervalos INTEGER DEFAULT 0,
-    repeticion_creada BOOLEAN DEFAULT FALSE
+    repeticion_creada BOOLEAN DEFAULT FALSE,
+    ultimo_envio_en TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS chats_info (

@@ -109,6 +109,45 @@ def crear_tabla_recordatorios(supabase: Client) -> bool:
         CREATE INDEX IF NOT EXISTS idx_chat_id ON recordatorios (chat_id);
         CREATE INDEX IF NOT EXISTS idx_fecha_hora ON recordatorios (fecha_hora);
         CREATE INDEX IF NOT EXISTS idx_notificado ON recordatorios (notificado);
+
+        ALTER TABLE recordatorios
+            ADD COLUMN IF NOT EXISTS ultimo_envio_en TIMESTAMPTZ;
+
+        CREATE OR REPLACE FUNCTION reclamar_envio_recordatorio(
+            p_id BIGINT,
+            p_chat_id TEXT,
+            p_intervalo_segundos INTEGER DEFAULT 50
+        ) RETURNS BOOLEAN
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = public
+        AS $$
+        DECLARE
+            v_id BIGINT;
+        BEGIN
+            UPDATE recordatorios
+            SET ultimo_envio_en = NOW()
+            WHERE id = p_id
+              AND chat_id = p_chat_id
+              AND COALESCE(aviso_detenido, FALSE) = FALSE
+              AND (
+                  COALESCE(aviso_constante, FALSE) = TRUE
+                  OR COALESCE(notificado, FALSE) = FALSE
+              )
+              AND (
+                  ultimo_envio_en IS NULL
+                  OR ultimo_envio_en <= NOW() - make_interval(
+                      secs => GREATEST(p_intervalo_segundos, 1)
+                  )
+              )
+            RETURNING id INTO v_id;
+            RETURN v_id IS NOT NULL;
+        END;
+        $$;
+
+        GRANT EXECUTE ON FUNCTION reclamar_envio_recordatorio(
+            BIGINT, TEXT, INTEGER
+        ) TO anon, authenticated, service_role;
         """
         response = supabase.rpc("exec_sql", {"sql": sql}).execute()
         print(response)

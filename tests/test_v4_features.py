@@ -885,6 +885,10 @@ class SnoozeTests(unittest.TestCase):
 
 
 class ReminderButtonTests(unittest.TestCase):
+    @patch(
+        "reminders.supabase_db.reclamar_envio_recordatorio",
+        return_value=True,
+    )
     @patch("reminders.supabase_db.marcar_como_notificado")
     @patch("reminders.enviar_mensaje_con_grid")
     @patch("reminders.conversations.inicializar_conversaciones")
@@ -893,6 +897,7 @@ class ReminderButtonTests(unittest.TestCase):
         init_conversation,
         send_grid,
         mark_notified,
+        claim,
     ):
         init_conversation.return_value = {
             "42": {"datos": {"zona_horaria": "UTC"}}
@@ -930,7 +935,12 @@ class ReminderButtonTests(unittest.TestCase):
             ],
         )
         mark_notified.assert_called_once_with(25)
+        claim.assert_called_once_with(25, "42")
 
+    @patch(
+        "reminders.supabase_db.reclamar_envio_recordatorio",
+        return_value=True,
+    )
     @patch("reminders.supabase_db.aviso_constante_sigue_activo")
     @patch("reminders.actualizar_estado_chat_id")
     @patch("reminders.supabase_db.marcar_como_notificado")
@@ -943,6 +953,7 @@ class ReminderButtonTests(unittest.TestCase):
         mark_notified,
         save_state,
         is_active,
+        claim,
     ):
         is_active.return_value = True
         init_conversation.return_value = {
@@ -974,12 +985,17 @@ class ReminderButtonTests(unittest.TestCase):
         rows = send_grid.call_args.args[2]
         self.assertEqual(rows[-1][0]["data"], "stop_reminder:26")
         mark_notified.assert_called_once_with(26)
+        claim.assert_called_once_with(26, "42")
 
+    @patch(
+        "reminders.supabase_db.reclamar_envio_recordatorio",
+        return_value=True,
+    )
     @patch("reminders.supabase_db.aviso_constante_sigue_activo")
     @patch("reminders.enviar_mensaje_con_grid")
     @patch("reminders.conversations.inicializar_conversaciones")
     def test_stopped_constant_is_rechecked_and_not_sent(
-        self, init_conversation, send_grid, is_active
+        self, init_conversation, send_grid, is_active, claim
     ):
         init_conversation.return_value = {
             "42": {"datos": {"zona_horaria": "UTC"}}
@@ -1001,6 +1017,27 @@ class ReminderButtonTests(unittest.TestCase):
 
         reminders.AdministradorRecordatorios()._enviar_recordatorio(record)
 
+        send_grid.assert_not_called()
+
+    @patch(
+        "reminders.supabase_db.reclamar_envio_recordatorio",
+        return_value=False,
+    )
+    @patch("reminders.enviar_mensaje_con_grid")
+    @patch("reminders.conversations.inicializar_conversaciones")
+    def test_claimed_reminder_is_not_sent_by_a_second_instance(
+        self, init_conversation, send_grid, claim
+    ):
+        record = {
+            "id": 26,
+            "chat_id": "42",
+            "aviso_constante": True,
+        }
+
+        reminders.AdministradorRecordatorios()._enviar_recordatorio(record)
+
+        claim.assert_called_once_with(26, "42")
+        init_conversation.assert_not_called()
         send_grid.assert_not_called()
 
 

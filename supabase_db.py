@@ -439,7 +439,6 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
     cliente = _obtener_cliente_supabase_por_hilo()
     if not cliente:
         return False
-
     try:
         response = cliente.table("recordatorios") \
             .update({"aviso_detenido": estado}) \
@@ -457,6 +456,29 @@ def cambiar_estado_aviso_detenido(chat_id, estado):
 
     except Exception as e:
         print(f"Error al actualizar aviso_detenido para {chat_id}: {e}")
+        return False
+
+
+@con_reintentos(max_reintentos=2)
+def reclamar_envio_recordatorio(recordatorio_id, chat_id, intervalo_segundos=50):
+    """Reserva atómicamente un envío para impedir duplicados entre instancias."""
+    cliente = _obtener_cliente_supabase_por_hilo()
+    if not cliente:
+        return False
+    try:
+        response = cliente.rpc(
+            "reclamar_envio_recordatorio",
+            {
+                "p_id": int(recordatorio_id),
+                "p_chat_id": str(chat_id),
+                "p_intervalo_segundos": int(intervalo_segundos),
+            },
+        ).execute()
+        return response.data is True
+    except Exception as e:
+        print(
+            f"Error al reservar envío del recordatorio {recordatorio_id}: {e}"
+        )
         return False
 
 

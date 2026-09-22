@@ -235,10 +235,14 @@ Aunque el registro ya esté marcado como notificado, vuelve a entrar en la consu
 de pendientes y se envía aproximadamente una vez por minuto. Cada mensaje incluye
 un botón `Detener`.
 
-En la implementación actual, `parar`, `detener`, `alto` o el botón `Detener`
-marcan como detenidos todos los avisos constantes notificados del mismo `chat_id`,
-no únicamente el recordatorio cuyo botón fue pulsado. Los mensajes conservados en
-el estado del chat se editan para indicar que fueron detenidos.
+Antes de enviar, cada instancia intenta reservar atómicamente el ciclo mediante
+la función `reclamar_envio_recordatorio` de Supabase. Sólo la instancia que obtiene
+la reserva puede contactar a Telegram; `ultimo_envio_en` impide envíos duplicados
+si por accidente se ejecutan dos contenedores o procesos.
+
+El botón `Detener` incluye el ID y detiene únicamente la ocurrencia que originó
+ese mensaje. Los comandos escritos `parar`, `detener` y `alto` se conservan como
+acción global para detener los avisos constantes ya notificados del chat.
 
 ### Aplazamiento
 
@@ -762,26 +766,23 @@ Estas observaciones continúan vigentes después de esta actualización:
 1. `DEPLOY.md` describe `5500`, mientras Compose y Gunicorn usan `8443`.
 2. El dominio de producción está escrito directamente en `docker-compose.yml`.
 3. `LOCAL_MODE` se lee antes de `load_dotenv()`.
-4. `webhook_utils.py` usa `TELEGRAM_BOT_TOKEN`, pero producción usa
-   `TELEGRAM_TOKEN`.
-5. Detener un aviso constante detiene todos los avisos constantes notificados del
-   chat.
-6. PostgreSQL es solo respaldo; no existe failover automático.
-7. Si Supabase falla al arrancar, el administrador no se recupera sin reinicio.
-8. Las políticas RLS permiten acceso completo al rol `anon`.
-9. El estado global en memoria limita el escalado a varios procesos/instancias.
-10. Los callbacks y el diccionario global no tienen bloqueo explícito entre los
+4. PostgreSQL es solo respaldo; no existe failover automático.
+5. Si Supabase falla al arrancar, el administrador no se recupera sin reinicio.
+6. Las políticas RLS permiten acceso completo al rol `anon`.
+7. El estado global en memoria limita el escalado de conversaciones a varias
+   instancias; los envíos de recordatorios sí cuentan con reserva atómica.
+8. Los callbacks y el diccionario global no tienen bloqueo explícito entre los
     ocho hilos de Gunicorn.
-11. `setup_supabase.py` depende de una función RPC `exec_sql` ya disponible; no
+9. `setup_supabase.py` depende de una función RPC `exec_sql` ya disponible; no
     puede crearla por sí mismo.
-12. El respaldo no incluye `modo_tester`.
-13. La suite automatizada cubre las funciones nuevas, pero no todos los flujos
+10. El respaldo no incluye `modo_tester`.
+11. La suite automatizada cubre las funciones nuevas, pero no todos los flujos
     conversacionales históricos.
-14. Algunas herramientas SQLite permanecen en el repositorio aunque ya no forman
+12. Algunas herramientas SQLite permanecen en el repositorio aunque ya no forman
     parte del runtime.
-15. Los archivos `debug_*.json` crecen sin rotación mientras el contenedor vive.
-16. Algunas llamadas HTTP de Telegram no declaran timeout explícito.
-17. El chat administrador para errores de base de datos está hardcodeado.
+13. Los archivos `debug_*.json` crecen sin rotación mientras el contenedor vive.
+14. Algunas llamadas HTTP de Telegram no declaran timeout explícito.
+15. El chat administrador para errores de base de datos está hardcodeado.
 
 ## Regla de mantenimiento de la v4
 

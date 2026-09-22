@@ -54,12 +54,15 @@ def _asegurar_esquema_cripto(conn):
     """Añade las tablas nuevas también en instalaciones de backup existentes."""
     cursor = conn.cursor()
     cursor.execute("""
+        ALTER TABLE recordatorios
+            ADD COLUMN IF NOT EXISTS ultimo_envio_en TIMESTAMPTZ;
+
         CREATE TABLE IF NOT EXISTS cripto_premium_users (
             chat_id TEXT PRIMARY KEY,
             activo BOOLEAN NOT NULL DEFAULT TRUE,
             creado_en TIMESTAMPTZ DEFAULT NOW(),
-            actualizado_en TIMESTAMPTZ DEFAULT NOW()
-        );
+              actualizado_en TIMESTAMPTZ DEFAULT NOW()
+          );
 
         CREATE TABLE IF NOT EXISTS cripto_alertas (
             id BIGINT PRIMARY KEY,
