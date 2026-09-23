@@ -471,6 +471,12 @@ El administrador usa la librería `schedule` dentro de un hilo daemon.
 
 El bucle del scheduler despierta cada segundo para ejecutar trabajos pendientes.
 
+El proceso también verifica periódicamente que el webhook de Telegram siga
+apuntando a `WEBHOOK_URL`. Si otra instalación que comparte el mismo token lo
+reemplaza, el guardián lo restaura usando el certificado configurado. El
+intervalo se controla con `WEBHOOK_GUARD_INTERVAL_SECONDS` y es de 30 segundos
+por defecto.
+
 ## Datos y persistencia
 
 ### Supabase

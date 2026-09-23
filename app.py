@@ -13,6 +13,7 @@ from crypto_alerts import (
     detener_monitor_criptoalertas,
 )
 from crypto_strength import iniciar_monitor_fuerza, detener_monitor_fuerza
+from webhook_utils import iniciar_guardian_webhook, detener_guardian_webhook
 from routes import routes  # nuestro nuevo módulo de rutas
 
 MODO_TESTER = False
@@ -32,6 +33,7 @@ def cerrar_aplicacion():
     print("Cerrando aplicación...")
     detener_monitor_criptoalertas()
     detener_monitor_fuerza()
+    detener_guardian_webhook()
     detener_administrador()
     print("Recursos liberados")
     print("Estableciendo servidor remoto...")
@@ -54,6 +56,8 @@ else:
     iniciar_administrador()
     iniciar_monitor_criptoalertas()
     iniciar_monitor_fuerza()
+    if not LOCAL_MODE:
+        iniciar_guardian_webhook()
 # Registrar cierre limpio
 atexit.register(cerrar_aplicacion)
 signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())

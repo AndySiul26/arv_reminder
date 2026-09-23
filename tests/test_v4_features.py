@@ -16,6 +16,37 @@ import conversations
 import crypto_alerts
 import crypto_strength
 import reminders
+import webhook_utils
+
+
+class WebhookGuardTests(unittest.TestCase):
+    @patch("webhook_utils.set_webhook")
+    @patch("webhook_utils.requests.get")
+    def test_keeps_correct_webhook_without_reconfiguring(self, get, set_webhook):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "result": {"url": "https://example.com/webhook"}
+        }
+        get.return_value = response
+        with patch.dict(os.environ, {"WEBHOOK_URL": "https://example.com/webhook"}):
+            self.assertTrue(webhook_utils.asegurar_webhook())
+        set_webhook.assert_not_called()
+
+    @patch("webhook_utils.set_webhook", return_value=True)
+    @patch("webhook_utils.requests.get")
+    def test_restores_webhook_replaced_by_another_installation(
+        self, get, set_webhook
+    ):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "result": {"url": "https://unexpected.example/webhook"}
+        }
+        get.return_value = response
+        with patch.dict(os.environ, {"WEBHOOK_URL": "https://example.com/webhook"}):
+            self.assertTrue(webhook_utils.asegurar_webhook())
+        set_webhook.assert_called_once_with("https://example.com/webhook")
 
 
 class DurationParsingTests(unittest.TestCase):
