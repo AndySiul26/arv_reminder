@@ -57,6 +57,9 @@ ESTADO_FUERZA_TIMEFRAME      = "fuerza_timeframe"
 ESTADO_FUERZA_MODO           = "fuerza_modo"
 ESTADO_FUERZA_UMBRAL         = "fuerza_umbral"
 ESTADO_FUERZA_UMBRAL_CUSTOM  = "fuerza_umbral_custom"
+ESTADO_FUERZA_CAMBIO_BANDA   = "fuerza_cambio_banda"
+ESTADO_FUERZA_CAMBIO_MIN     = "fuerza_cambio_min"
+ESTADO_FUERZA_CAMBIO_MAX     = "fuerza_cambio_max"
 ESTADO_FUERZA_CONSTANTE      = "fuerza_constante"
 CRIPTO_POR_PAGINA = 5
 CRYPTO_LIVE_UPDATE_SECONDS = max(
@@ -713,12 +716,14 @@ def _seleccionar_fuerza_timeframe(chat_id, timeframe):
             [{"texto": "🧭 Fuerza + cruce 0%", "data": "strength_mode:ambos"}],
         ])
     filas.extend([
+        [{"texto": "📊 Cambio simple", "data": "strength_mode:cambio_simple"}],
         [{"texto": "↔️ Cruce por 0%", "data": "strength_mode:cruce_cero"}],
         [{"texto": "❌ Cancelar", "data": "cancelar"}],
     ])
     note = (
         "\n\n⚠️ El cambio está demasiado cerca de 0%; para evitar divisiones "
-        "inestables, por ahora sólo está disponible el cruce por cero."
+        "inestables, no está disponible el cambio de fuerza. Sí puedes usar "
+        "el cambio simple o el cruce por cero."
         if near_zero else ""
     )
     _mostrar_fuerza_grid(
@@ -758,6 +763,29 @@ def _mostrar_umbral_fuerza(chat_id):
     return ""
 
 
+def _mostrar_banda_cambio_simple(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_CAMBIO_BANDA
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_fuerza_grid(
+        chat_id,
+        "📊 Límites del cambio simple\n\n"
+        "Se compara directamente el cambio de precio de la temporalidad. "
+        "Por ejemplo, ±5% avisa cuando el cambio sea ≤ −5% o ≥ +5%.",
+        [
+            [
+                {"texto": "±1%", "data": "strength_simple_band:1"},
+                {"texto": "±2%", "data": "strength_simple_band:2"},
+            ],
+            [
+                {"texto": "±5%", "data": "strength_simple_band:5"},
+                {"texto": "✍️ Personalizados", "data": "strength_simple_custom"},
+            ],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
 def _mostrar_constante_fuerza(chat_id):
     conversaciones[chat_id]["estado"] = ESTADO_FUERZA_CONSTANTE
     conversaciones[chat_id]["wait_callback"] = True
@@ -786,15 +814,23 @@ def _guardar_fuerza(chat_id, constante):
         datos["strength_mode"],
         analisis["cambio_pct"],
         analisis["precio_actual"],
-        datos.get("strength_threshold"),
-        constante,
+        umbral_pct=datos.get("strength_threshold"),
+        aviso_constante=constante,
+        cambio_min_pct=datos.get("strength_change_min"),
+        cambio_max_pct=datos.get("strength_change_max"),
     )
     if not alerta:
         return "No pude guardar el análisis. Intenta nuevamente."
-    threshold = (
-        f"±{datos['strength_threshold']}%"
-        if datos.get("strength_threshold") is not None else "cruce por 0%"
-    )
+    if datos["strength_mode"] == "cambio_simple":
+        threshold = (
+            f"≤ {datos['strength_change_min']}% o "
+            f"≥ {datos['strength_change_max']}%"
+        )
+    else:
+        threshold = (
+            f"±{datos['strength_threshold']}%"
+            if datos.get("strength_threshold") is not None else "cruce por 0%"
+        )
     _mostrar_fuerza_grid(
         chat_id,
         "✅ Análisis continuo creado\n\n"
@@ -848,11 +884,27 @@ def mostrar_detalle_fuerza(chat_id, alerta_id, message_id=None):
         "fuerza": "variación de fuerza",
         "cruce_cero": "cruce por cero",
         "ambos": "fuerza y cruce por cero",
+        "cambio_simple": "cambio simple de la temporalidad",
     }
-    umbral = (
-        f"±{crypto_alerts.formatear_precio(alerta['umbral_pct'])}%"
-        if alerta.get("umbral_pct") is not None else "no aplica"
-    )
+    if alerta.get("modo") == "cambio_simple":
+        umbral = (
+            f"≤ {crypto_strength._fmt(alerta['cambio_min_pct'])} o "
+            f"≥ {crypto_strength._fmt(alerta['cambio_max_pct'])}"
+        )
+    else:
+        umbral = (
+            f"±{crypto_alerts.formatear_precio(alerta['umbral_pct'])}%"
+            if alerta.get("umbral_pct") is not None else "no aplica"
+        )
+    botones = []
+    if alerta.get("modo") != "cambio_simple":
+        botones.append([
+            {"texto": "🎯 Recalibrar ahora", "data": f"strength_rebase:{alerta['id']}"}
+        ])
+    botones.extend([
+        [{"texto": "🗑 Eliminar", "data": f"strength_delete:{alerta['id']}"}],
+        [{"texto": "⬅️ Volver", "data": "strength_list"}],
+    ])
     _mostrar_fuerza_grid(
         chat_id,
         f"📊 Análisis #{alerta['id']}\n\n"
@@ -863,11 +915,7 @@ def mostrar_detalle_fuerza(chat_id, alerta_id, message_id=None):
         f"🎯 Umbral: {umbral}\n"
         f"🔔 Aviso: {'constante' if alerta.get('aviso_constante') else 'único por evento'}\n"
         "🏦 Fuente: Coinbase Exchange",
-        [
-            [{"texto": "🎯 Recalibrar ahora", "data": f"strength_rebase:{alerta['id']}"}],
-            [{"texto": "🗑 Eliminar", "data": f"strength_delete:{alerta['id']}"}],
-            [{"texto": "⬅️ Volver", "data": "strength_list"}],
-        ],
+        botones,
         message_id,
     )
     return ""
@@ -2056,6 +2104,9 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_FUERZA_MODO,
             ESTADO_FUERZA_UMBRAL,
             ESTADO_FUERZA_UMBRAL_CUSTOM,
+            ESTADO_FUERZA_CAMBIO_BANDA,
+            ESTADO_FUERZA_CAMBIO_MIN,
+            ESTADO_FUERZA_CAMBIO_MAX,
             ESTADO_FUERZA_CONSTANTE,
         ]:
             message_id = (
@@ -2134,7 +2185,7 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         if not texto.startswith("strength_mode:"):
             return "Selecciona el tipo de análisis."
         mode = texto.split(":", 1)[1]
-        if mode not in ("fuerza", "cruce_cero", "ambos"):
+        if mode not in ("fuerza", "cruce_cero", "ambos", "cambio_simple"):
             return "Tipo de análisis inválido."
         analisis = conversaciones[chat_id]["datos"]["strength_analysis"]
         if mode in ("fuerza", "ambos") and abs(
@@ -2144,6 +2195,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         conversaciones[chat_id]["datos"]["strength_mode"] = mode
         if mode == "cruce_cero":
             return _mostrar_constante_fuerza(chat_id)
+        if mode == "cambio_simple":
+            return _mostrar_banda_cambio_simple(chat_id)
         return _mostrar_umbral_fuerza(chat_id)
 
     if estado_actual == ESTADO_FUERZA_UMBRAL:
@@ -2176,6 +2229,58 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         if value < 1 or value > 500:
             return "El porcentaje debe estar entre 1 y 500."
         conversaciones[chat_id]["datos"]["strength_threshold"] = str(value)
+        return _mostrar_constante_fuerza(chat_id)
+
+    if estado_actual == ESTADO_FUERZA_CAMBIO_BANDA:
+        if texto == "strength_simple_custom":
+            conversaciones[chat_id]["estado"] = ESTADO_FUERZA_CAMBIO_MIN
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_fuerza_grid(
+                chat_id,
+                "✍️ Escribe el límite inferior del cambio simple.\n\n"
+                "Ejemplo: -5",
+                [],
+            )
+            return ""
+        if not texto.startswith("strength_simple_band:"):
+            return "Selecciona una banda de cambio simple."
+        try:
+            value = Decimal(texto.split(":", 1)[1].replace(",", "."))
+        except InvalidOperation:
+            return "Banda inválida."
+        if value <= 0 or value > 100:
+            return "La banda simétrica debe ser mayor que 0 y hasta 100%."
+        conversaciones[chat_id]["datos"]["strength_change_min"] = str(-value)
+        conversaciones[chat_id]["datos"]["strength_change_max"] = str(value)
+        return _mostrar_constante_fuerza(chat_id)
+
+    if estado_actual == ESTADO_FUERZA_CAMBIO_MIN:
+        try:
+            value = Decimal(str(texto).replace("%", "").replace(",", ".").strip())
+        except InvalidOperation:
+            return "Escribe un porcentaje inferior válido. Ejemplo: -5"
+        if not value.is_finite() or value < -100 or value >= 10000:
+            return "El límite inferior debe estar entre -100% y menos de 10000%."
+        conversaciones[chat_id]["datos"]["strength_change_min"] = str(value)
+        conversaciones[chat_id]["estado"] = ESTADO_FUERZA_CAMBIO_MAX
+        conversaciones[chat_id]["wait_callback"] = False
+        _mostrar_fuerza_grid(
+            chat_id,
+            "✍️ Ahora escribe el límite superior.\n\n"
+            f"Debe ser mayor que {value}%. Ejemplo: 5",
+            [],
+        )
+        return ""
+
+    if estado_actual == ESTADO_FUERZA_CAMBIO_MAX:
+        try:
+            value = Decimal(str(texto).replace("%", "").replace(",", ".").strip())
+        except InvalidOperation:
+            return "Escribe un porcentaje superior válido. Ejemplo: 5"
+        lower = Decimal(conversaciones[chat_id]["datos"]["strength_change_min"])
+        if not value.is_finite() or value <= lower or value > 10000:
+            return f"El límite superior debe ser mayor que {lower}% y hasta 10000%."
+        conversaciones[chat_id]["datos"]["strength_change_max"] = str(value)
         return _mostrar_constante_fuerza(chat_id)
 
     if estado_actual == ESTADO_FUERZA_CONSTANTE:

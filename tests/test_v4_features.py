@@ -459,6 +459,26 @@ class CryptoStrengthTests(unittest.TestCase):
         self.assertIn("fuerza_baja", hits)
         self.assertIn("cruce_bajista", hits)
 
+    def test_simple_change_uses_absolute_timeframe_limits(self):
+        alert = {
+            "modo": "cambio_simple",
+            "cambio_min_pct": "-5",
+            "cambio_max_pct": "5",
+            "cambio_referencia_pct": "2.2",
+        }
+        hits, _strength = crypto_strength.evaluar_condicion(
+            alert, {"cambio_pct": Decimal("-5")}
+        )
+        self.assertEqual(hits, ["cambio_bajo"])
+        hits, _strength = crypto_strength.evaluar_condicion(
+            alert, {"cambio_pct": Decimal("5")}
+        )
+        self.assertEqual(hits, ["cambio_alto"])
+        hits, _strength = crypto_strength.evaluar_condicion(
+            alert, {"cambio_pct": Decimal("2.2")}
+        )
+        self.assertEqual(hits, [])
+
     @patch("crypto_strength.requests.get")
     def test_analysis_uses_exact_pair_and_window_close(self, get):
         now = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
@@ -676,7 +696,72 @@ class CryptoConversationTests(unittest.TestCase):
                 )
 
         create.assert_called_once_with(
-            "42", "Andy", "ada_usd", "1h", "ambos", "2.5", "0.25", "20", True
+            "42", "Andy", "ada_usd", "1h", "ambos", "2.5", "0.25",
+            umbral_pct="20",
+            aviso_constante=True,
+            cambio_min_pct=None,
+            cambio_max_pct=None,
+        )
+        self.assertNotIn("42", conversations.conversaciones)
+
+    def test_complete_simple_change_alert_flow(self):
+        conversations.conversaciones["42"] = {
+            "estado": "",
+            "wait_callback": False,
+            "id_callback": None,
+            "datos": {"usuario": "Andy", "zona_horaria": "UTC"},
+            "recordatorios_aviso_constante": {},
+        }
+        response = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 901}},
+        )
+        analysis = {
+            "book": "ada_usd",
+            "product_id": "ADA-USD",
+            "temporalidad": "1h",
+            "temporalidad_label": "1 hora",
+            "precio_actual": Decimal("0.25"),
+            "precio_referencia": Decimal("0.243902439"),
+            "cambio_pct": Decimal("2.2"),
+            "referencia_en": "2026-09-23T09:00:00+00:00",
+            "consultado_en": "2026-09-23T10:00:00+00:00",
+            "provider": "coinbase_exchange",
+            "provider_label": "Coinbase Exchange",
+            "price_type": "ticker y cierre de vela",
+        }
+        with (
+            patch("conversations.crypto_alerts.es_usuario_premium", return_value=True),
+            patch("conversations.crypto_strength.validar_producto"),
+            patch("conversations.crypto_strength.obtener_analisis", return_value=analysis),
+            patch("conversations.crypto_strength.crear_alerta", return_value={"id": 13}) as create,
+            patch("conversations.enviar_mensaje_con_grid", return_value=response),
+            patch("conversations.editar_mensaje_con_grid", return_value=response),
+            patch("conversations.supabase_db.upsert_chat_info"),
+            patch("conversations.guardar_estado"),
+            patch(
+                "conversations.inicializar_conversaciones",
+                side_effect=lambda *_args, **_kwargs: conversations.conversaciones,
+            ),
+        ):
+            conversations.iniciar_criptofuerza("42", "Andy")
+            for callback in (
+                "strength_book:ada_usd",
+                "strength_tf:1h",
+                "strength_mode:cambio_simple",
+                "strength_simple_band:5",
+                "strength_constant:no",
+            ):
+                conversations.procesar_callback(
+                    "42", callback, "Andy", "private", 901
+                )
+
+        create.assert_called_once_with(
+            "42", "Andy", "ada_usd", "1h", "cambio_simple", "2.2", "0.25",
+            umbral_pct=None,
+            aviso_constante=False,
+            cambio_min_pct="-5",
+            cambio_max_pct="5",
         )
         self.assertNotIn("42", conversations.conversaciones)
 

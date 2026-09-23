@@ -353,8 +353,10 @@ def crear_tablas_criptoalertas(supabase: Client):
             temporalidad TEXT NOT NULL
                 CHECK (temporalidad IN ('1m', '5m', '30m', '1h', '4h', '1d')),
             modo TEXT NOT NULL
-                CHECK (modo IN ('fuerza', 'cruce_cero', 'ambos')),
+                CHECK (modo IN ('fuerza', 'cruce_cero', 'ambos', 'cambio_simple')),
             umbral_pct NUMERIC(18, 8),
+            cambio_min_pct NUMERIC(18, 8),
+            cambio_max_pct NUMERIC(18, 8),
             cambio_referencia_pct NUMERIC(18, 8) NOT NULL,
             precio_referencia_inicial NUMERIC(38, 18) NOT NULL,
             aviso_constante BOOLEAN NOT NULL DEFAULT FALSE,
@@ -372,6 +374,14 @@ def crear_tablas_criptoalertas(supabase: Client):
             creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE cripto_fuerza_alertas
+            ADD COLUMN IF NOT EXISTS cambio_min_pct NUMERIC(18, 8),
+            ADD COLUMN IF NOT EXISTS cambio_max_pct NUMERIC(18, 8);
+        ALTER TABLE cripto_fuerza_alertas
+            DROP CONSTRAINT IF EXISTS cripto_fuerza_alertas_modo_check;
+        ALTER TABLE cripto_fuerza_alertas
+            ADD CONSTRAINT cripto_fuerza_alertas_modo_check
+            CHECK (modo IN ('fuerza', 'cruce_cero', 'ambos', 'cambio_simple'));
         CREATE INDEX IF NOT EXISTS idx_cripto_fuerza_chat
             ON cripto_fuerza_alertas (chat_id);
         CREATE INDEX IF NOT EXISTS idx_cripto_fuerza_estado_mercado

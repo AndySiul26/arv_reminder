@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS cripto_fuerza_alertas (
     temporalidad TEXT NOT NULL,
     modo TEXT NOT NULL,
     umbral_pct NUMERIC(18, 8),
+    cambio_min_pct NUMERIC(18, 8),
+    cambio_max_pct NUMERIC(18, 8),
     cambio_referencia_pct NUMERIC(18, 8) NOT NULL,
     precio_referencia_inicial NUMERIC(38, 18) NOT NULL,
     aviso_constante BOOLEAN DEFAULT FALSE,

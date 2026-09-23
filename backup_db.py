@@ -66,6 +66,8 @@ def _asegurar_esquema_cripto(conn):
             temporalidad TEXT NOT NULL,
             modo TEXT NOT NULL,
             umbral_pct NUMERIC(18, 8),
+            cambio_min_pct NUMERIC(18, 8),
+            cambio_max_pct NUMERIC(18, 8),
             cambio_referencia_pct NUMERIC(18, 8) NOT NULL,
             precio_referencia_inicial NUMERIC(38, 18) NOT NULL,
             aviso_constante BOOLEAN DEFAULT FALSE,
@@ -82,6 +84,10 @@ def _asegurar_esquema_cripto(conn):
             creado_en TIMESTAMPTZ DEFAULT NOW(),
             actualizado_en TIMESTAMPTZ DEFAULT NOW()
         );
+
+        ALTER TABLE cripto_fuerza_alertas
+            ADD COLUMN IF NOT EXISTS cambio_min_pct NUMERIC(18, 8),
+            ADD COLUMN IF NOT EXISTS cambio_max_pct NUMERIC(18, 8);
 
         CREATE TABLE IF NOT EXISTS cripto_premium_users (
             chat_id TEXT PRIMARY KEY,

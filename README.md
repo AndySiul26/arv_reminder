@@ -405,9 +405,15 @@ fuerza = (cambio_actual - cambio_referencia) / |cambio_referencia| × 100
 
 Por ejemplo, pasar de un cambio de `+2.5%` a `+1.5%` produce una variación de
 fuerza de `-40%`. El usuario puede vigilar un umbral simétrico —por ejemplo
-`≤ -20%` o `≥ +20%`—, un cruce por cero, o ambas condiciones. Una referencia
-con magnitud inferior a `0.05%` no admite cálculo de fuerza porque la división
-sería inestable; en ese caso sólo se ofrece el cruce por cero.
+`≤ -20%` o `≥ +20%`—, un cruce por cero, o ambas condiciones.
+
+El modo **Cambio simple** compara directamente `cambio` contra una banda. Una
+banda `-5% / +5%`, por ejemplo, avisa cuando el cambio de la temporalidad es
+`≤ -5%` o `≥ +5%`; no realiza un porcentaje sobre otro porcentaje. Hay bandas
+rápidas de ±1%, ±2% y ±5%, además de límites inferior y superior
+personalizados. Una referencia con magnitud inferior a `0.05%` no admite el
+cálculo de fuerza porque la división sería inestable, pero sí permite usar el
+cambio simple o el cruce por cero.
 
 El aviso único se emite una vez al entrar en la condición y se rearma al salir.
 El aviso constante se repite aproximadamente cada minuto mientras continúe la
@@ -457,6 +463,7 @@ El administrador usa la librería `schedule` dentro de un hilo daemon.
 | Conexión continua | Recibe el último precio por el WebSocket público de Bitso. |
 | Cada 10 segundos, mientras se configura | Refresca el precio en el mismo mensaje de Telegram. |
 | Cada 1 minuto | Evalúa límites y repite criptoalertas constantes activas. |
+| Cada 1 minuto | Evalúa fuerza, cambio simple y cruces por cero. |
 | Cada 1 minuto, temporalmente | Reintenta solicitar zonas faltantes hasta completar la migración. |
 | Cada 5 minutos | Revisa y distribuye notas de actualización. |
 | Cada 30 minutos | Replica Supabase hacia PostgreSQL local. |

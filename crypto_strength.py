@@ -184,6 +184,13 @@ def evaluar_condicion(alerta, analisis):
             hits.append("cruce_bajista")
         elif referencia < 0 and actual >= 0:
             hits.append("cruce_alcista")
+    if mode == "cambio_simple":
+        lower = alerta.get("cambio_min_pct")
+        upper = alerta.get("cambio_max_pct")
+        if lower is not None and actual <= Decimal(str(lower)):
+            hits.append("cambio_bajo")
+        elif upper is not None and actual >= Decimal(str(upper)):
+            hits.append("cambio_alto")
     return hits, fuerza
 
 
@@ -197,7 +204,22 @@ def crear_alerta(
     precio_referencia,
     umbral_pct=None,
     aviso_constante=False,
+    cambio_min_pct=None,
+    cambio_max_pct=None,
 ):
+    if modo == "cambio_simple":
+        try:
+            lower = Decimal(str(cambio_min_pct))
+            upper = Decimal(str(cambio_max_pct))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if (
+            not lower.is_finite()
+            or not upper.is_finite()
+            or lower < Decimal("-100")
+            or lower >= upper
+        ):
+            return None
     client = crypto_alerts._db()
     if not client:
         return None
@@ -208,6 +230,12 @@ def crear_alerta(
         "temporalidad": temporalidad,
         "modo": modo,
         "umbral_pct": str(umbral_pct) if umbral_pct is not None else None,
+        "cambio_min_pct": (
+            str(cambio_min_pct) if cambio_min_pct is not None else None
+        ),
+        "cambio_max_pct": (
+            str(cambio_max_pct) if cambio_max_pct is not None else None
+        ),
         "cambio_referencia_pct": str(cambio_referencia_pct),
         "precio_referencia_inicial": str(precio_referencia),
         "aviso_constante": bool(aviso_constante),
@@ -339,14 +367,32 @@ def mensaje_alerta(alerta, analisis, hits, fuerza, repeticion=False):
         "fuerza_alta": "📈 La fuerza aumentó",
         "cruce_bajista": "🔻 El cambio cruzó a 0% o negativo",
         "cruce_alcista": "🔺 El cambio cruzó a 0% o positivo",
+        "cambio_bajo": "📉 El cambio simple alcanzó el límite inferior",
+        "cambio_alto": "📈 El cambio simple alcanzó el límite superior",
     }
-    title = "📢 ALERTA CONSTANTE DE FUERZA" if alerta.get(
-        "aviso_constante"
-    ) else "⚡ ALERTA DE FUERZA"
+    simple_mode = alerta.get("modo") == "cambio_simple"
+    subject = "CAMBIO" if simple_mode else "FUERZA"
+    title = (
+        f"📢 ALERTA CONSTANTE DE {subject}"
+        if alerta.get("aviso_constante")
+        else f"⚡ ALERTA DE {subject}"
+    )
     if repeticion:
         title += " · RECORDATORIO"
     hit_text = "\n".join(labels[item] for item in hits)
-    fuerza_text = _fmt(fuerza) if fuerza is not None else "no aplica"
+    fuerza_text = (
+        _fmt(fuerza) if fuerza is not None and not simple_mode else "no aplica"
+    )
+    limits_text = ""
+    if simple_mode:
+        limits_text = (
+            f"🎯 Banda configurada: ≤ {_fmt(alerta['cambio_min_pct'])} o "
+            f"≥ {_fmt(alerta['cambio_max_pct'])}\n"
+        )
+    reference_text = (
+        "" if simple_mode else
+        f"📌 Cambio usado como referencia: {_fmt(alerta['cambio_referencia_pct'])}\n"
+    )
     return (
         f"{title}\n\n{hit_text}\n\n"
         f"💎 Mercado: {crypto_alerts.nombre_book(alerta['book'])}\n"
@@ -354,7 +400,8 @@ def mensaje_alerta(alerta, analisis, hits, fuerza, repeticion=False):
         f"💰 Precio actual: {crypto_alerts.formatear_precio(analisis['precio_actual'])}\n"
         f"🕰 Precio al inicio de la ventana: {crypto_alerts.formatear_precio(analisis['precio_referencia'])}\n"
         f"📊 Cambio actual del precio: {_fmt(analisis['cambio_pct'])}\n"
-        f"📌 Cambio usado como referencia: {_fmt(alerta['cambio_referencia_pct'])}\n"
+        f"{limits_text}"
+        f"{reference_text}"
         f"🧭 Variación de fuerza: {fuerza_text}\n\n"
         "🏦 Fuente: Coinbase Exchange\n"
         f"📍 Tipo: {analisis['price_type']}\n"
@@ -427,6 +474,10 @@ class MonitorFuerzaCripto:
             for alerta in items:
                 hits, fuerza = evaluar_condicion(alerta, analysis)
                 active_before = bool(alerta.get("condicion_activa"))
+                current_side = ",".join(hits)
+                same_condition = (
+                    active_before and alerta.get("lado_activo") == current_side
+                )
                 updates = {
                     "ultimo_cambio_pct": str(analysis["cambio_pct"]),
                     "ultima_fuerza_pct": str(fuerza) if fuerza is not None else None,
@@ -444,22 +495,26 @@ class MonitorFuerzaCripto:
                         "id", alerta["id"]
                     ).execute()
                     continue
-                should_send = not active_before
+                should_send = not same_condition
                 repetition = False
-                if alerta.get("aviso_constante") and not alerta.get("aviso_detenido"):
+                stopped_for_this_condition = bool(
+                    alerta.get("aviso_detenido") and same_condition
+                )
+                if alerta.get("aviso_constante") and not stopped_for_this_condition:
                     last = crypto_alerts._parse_datetime(
                         alerta.get("ultima_notificacion_en")
                     )
-                    if not active_before or last is None or (
+                    if not same_condition or last is None or (
                         now - last
                     ).total_seconds() >= STRENGTH_CONSTANT_INTERVAL_SECONDS:
                         should_send = True
-                        repetition = active_before
-                elif alerta.get("aviso_detenido"):
+                        repetition = same_condition
+                elif stopped_for_this_condition:
                     should_send = False
                 updates.update({
                     "condicion_activa": True,
-                    "lado_activo": ",".join(hits),
+                    "lado_activo": current_side,
+                    "aviso_detenido": stopped_for_this_condition,
                 })
                 if should_send:
                     rows = []
@@ -476,6 +531,14 @@ class MonitorFuerzaCripto:
                     if response and response.status_code == 200:
                         updates["ultima_notificacion_en"] = now.isoformat()
                         enviados += 1
+                    else:
+                        # No desarmar una condición nueva si Telegram no
+                        # confirmó el aviso; se volverá a intentar.
+                        updates["condicion_activa"] = active_before
+                        updates["lado_activo"] = alerta.get("lado_activo")
+                        updates["aviso_detenido"] = bool(
+                            alerta.get("aviso_detenido")
+                        )
                 client.table("cripto_fuerza_alertas").update(updates).eq(
                     "id", alerta["id"]
                 ).execute()
