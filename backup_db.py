@@ -27,6 +27,7 @@ TABLAS_A_RESPALDAR = [
     "reportes",
     "cripto_premium_users",
     "cripto_alertas",
+    "cripto_fuerza_alertas",
 ]
 
 
@@ -56,6 +57,31 @@ def _asegurar_esquema_cripto(conn):
     cursor.execute("""
         ALTER TABLE recordatorios
             ADD COLUMN IF NOT EXISTS ultimo_envio_en TIMESTAMPTZ;
+
+        CREATE TABLE IF NOT EXISTS cripto_fuerza_alertas (
+            id BIGINT PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            temporalidad TEXT NOT NULL,
+            modo TEXT NOT NULL,
+            umbral_pct NUMERIC(18, 8),
+            cambio_referencia_pct NUMERIC(18, 8) NOT NULL,
+            precio_referencia_inicial NUMERIC(38, 18) NOT NULL,
+            aviso_constante BOOLEAN DEFAULT FALSE,
+            aviso_detenido BOOLEAN DEFAULT FALSE,
+            condicion_activa BOOLEAN DEFAULT FALSE,
+            lado_activo TEXT,
+            ultima_notificacion_en TIMESTAMPTZ,
+            ultimo_cambio_pct NUMERIC(18, 8),
+            ultima_fuerza_pct NUMERIC(18, 8),
+            ultimo_precio NUMERIC(38, 18),
+            ultima_consulta_en TIMESTAMPTZ,
+            estado TEXT DEFAULT 'activa',
+            fuente TEXT DEFAULT 'coinbase_exchange',
+            creado_en TIMESTAMPTZ DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ DEFAULT NOW()
+        );
 
         CREATE TABLE IF NOT EXISTS cripto_premium_users (
             chat_id TEXT PRIMARY KEY,

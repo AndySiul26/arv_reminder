@@ -2,10 +2,11 @@ import threading
 import re
 # ... el resto de tus importaciones mod detener avisos
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con_botones, editar_mensaje_texto, enviar_mensaje_con_grid, editar_mensaje_con_grid, eliminar_mensaje
 import supabase_db
 import crypto_alerts
+import crypto_strength
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
 import utilidades, os
@@ -50,6 +51,13 @@ ESTADO_CRIPTO_REARME         = "cripto_rearme"
 ESTADO_CRIPTO_REARME_CUSTOM  = "cripto_rearme_custom"
 ESTADO_CRIPTO_LISTA          = "cripto_lista"
 ESTADO_CRIPTO_DETALLE        = "cripto_detalle"
+# — ESTADOS ANÁLISIS DE FUERZA —
+ESTADO_FUERZA_BOOK           = "fuerza_book"
+ESTADO_FUERZA_TIMEFRAME      = "fuerza_timeframe"
+ESTADO_FUERZA_MODO           = "fuerza_modo"
+ESTADO_FUERZA_UMBRAL         = "fuerza_umbral"
+ESTADO_FUERZA_UMBRAL_CUSTOM  = "fuerza_umbral_custom"
+ESTADO_FUERZA_CONSTANTE      = "fuerza_constante"
 CRIPTO_POR_PAGINA = 5
 CRYPTO_LIVE_UPDATE_SECONDS = max(
     10, int(os.getenv("CRYPTO_LIVE_UPDATE_SECONDS", "10"))
@@ -581,6 +589,288 @@ def _normalizar_book(texto):
         .replace("-", "_")
         .replace(" ", "")
     )
+
+
+def _mostrar_fuerza_grid(chat_id, mensaje, filas, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    message_id = (
+        message_id
+        or datos.get("strength_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        response = editar_mensaje_con_grid(chat_id, message_id, mensaje, filas)
+        if response and response.status_code == 200:
+            datos["strength_message_id"] = message_id
+            conversaciones[chat_id]["id_callback"] = message_id
+            return response
+    response = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+    if response and response.status_code == 200:
+        try:
+            message_id = response.json()["result"]["message_id"]
+            datos["strength_message_id"] = message_id
+            conversaciones[chat_id]["id_callback"] = message_id
+        except (KeyError, TypeError, ValueError):
+            pass
+    return response
+
+
+def iniciar_criptofuerza(chat_id, nombre_usuario, message_id=None):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    datos = conversaciones[chat_id]["datos"]
+    for key in list(datos):
+        if key.startswith("strength_"):
+            datos.pop(key, None)
+    if message_id:
+        datos["strength_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    else:
+        datos.pop("strength_message_id", None)
+        conversaciones[chat_id]["id_callback"] = None
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_BOOK
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [
+            {"texto": "ADA/USD", "data": "strength_book:ada_usd"},
+            {"texto": "BTC/USD", "data": "strength_book:btc_usd"},
+        ],
+        [
+            {"texto": "ETH/USD", "data": "strength_book:eth_usd"},
+            {"texto": "SOL/USD", "data": "strength_book:sol_usd"},
+        ],
+        [{"texto": "✍️ Escribir otro par", "data": "strength_book_custom"}],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ]
+    _mostrar_fuerza_grid(
+        chat_id,
+        "📊 Análisis de fuerza Premium\n\n"
+        "Selecciona un par disponible en Coinbase Exchange. El activo y la "
+        "moneda se respetan exactamente.",
+        filas,
+        message_id,
+    )
+    return ""
+
+
+def _seleccionar_fuerza_book(chat_id, raw):
+    book = _normalizar_book(raw)
+    try:
+        crypto_strength.validar_producto(book)
+    except Exception as exc:
+        conversaciones[chat_id]["wait_callback"] = False
+        return f"No puedo analizar ese par en Coinbase Exchange: {exc}"
+    conversaciones[chat_id]["datos"]["strength_book"] = book
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_TIMEFRAME
+    conversaciones[chat_id]["wait_callback"] = True
+    filas = [
+        [
+            {"texto": "1 minuto", "data": "strength_tf:1m"},
+            {"texto": "5 minutos", "data": "strength_tf:5m"},
+        ],
+        [
+            {"texto": "30 minutos", "data": "strength_tf:30m"},
+            {"texto": "1 hora", "data": "strength_tf:1h"},
+        ],
+        [
+            {"texto": "4 horas", "data": "strength_tf:4h"},
+            {"texto": "1 día", "data": "strength_tf:1d"},
+        ],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ]
+    _mostrar_fuerza_grid(
+        chat_id,
+        f"📊 {crypto_alerts.nombre_book(book)}\n\n"
+        "Selecciona la temporalidad del cambio de precio que se analizará.",
+        filas,
+    )
+    return ""
+
+
+def _seleccionar_fuerza_timeframe(chat_id, timeframe):
+    if timeframe not in crypto_strength.TIMEFRAMES:
+        return "Temporalidad no válida."
+    datos = conversaciones[chat_id]["datos"]
+    try:
+        analisis = crypto_strength.obtener_analisis(
+            datos["strength_book"], timeframe
+        )
+    except Exception as exc:
+        return f"No pude calcular esa temporalidad ahora: {exc}"
+    datos["strength_timeframe"] = timeframe
+    datos["strength_analysis"] = {
+        key: str(value) if isinstance(value, Decimal) else value
+        for key, value in analisis.items()
+    }
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_MODO
+    conversaciones[chat_id]["wait_callback"] = True
+    near_zero = abs(analisis["cambio_pct"]) < crypto_strength.MIN_BASELINE_CHANGE
+    filas = []
+    if not near_zero:
+        filas.extend([
+            [{"texto": "🧭 Cambio de fuerza", "data": "strength_mode:fuerza"}],
+            [{"texto": "🧭 Fuerza + cruce 0%", "data": "strength_mode:ambos"}],
+        ])
+    filas.extend([
+        [{"texto": "↔️ Cruce por 0%", "data": "strength_mode:cruce_cero"}],
+        [{"texto": "❌ Cancelar", "data": "cancelar"}],
+    ])
+    note = (
+        "\n\n⚠️ El cambio está demasiado cerca de 0%; para evitar divisiones "
+        "inestables, por ahora sólo está disponible el cruce por cero."
+        if near_zero else ""
+    )
+    _mostrar_fuerza_grid(
+        chat_id,
+        f"📊 Referencia capturada\n\n"
+        f"💎 Mercado: {analisis['product_id'].replace('-', '/')}\n"
+        f"⏱ Temporalidad: {analisis['temporalidad_label']}\n"
+        f"💰 Precio actual: {crypto_alerts.formatear_precio(analisis['precio_actual'])}\n"
+        f"📈 Cambio actual: {crypto_strength._fmt(analisis['cambio_pct'])}\n"
+        f"🏦 Fuente: Coinbase Exchange\n\n"
+        "¿Qué deseas vigilar?" + note,
+        filas,
+    )
+    return ""
+
+
+def _mostrar_umbral_fuerza(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_UMBRAL
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_fuerza_grid(
+        chat_id,
+        "🧭 Umbral de variación de fuerza\n\n"
+        "Ejemplo: con referencia +2.5%, llegar a +1.5% representa −40% de "
+        "fuerza. Selecciona cuánto debe aumentar o disminuir para avisarte.",
+        [
+            [
+                {"texto": "±10%", "data": "strength_threshold:10"},
+                {"texto": "±20%", "data": "strength_threshold:20"},
+            ],
+            [
+                {"texto": "±40%", "data": "strength_threshold:40"},
+                {"texto": "✍️ Personalizado", "data": "strength_threshold_custom"},
+            ],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
+def _mostrar_constante_fuerza(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_FUERZA_CONSTANTE
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_fuerza_grid(
+        chat_id,
+        "🔔 Tipo de aviso\n\n"
+        "El aviso único se envía una vez por cada entrada al umbral. El "
+        "constante insiste aproximadamente cada minuto mientras continúe la "
+        "condición y se calma automáticamente al salir de ella.",
+        [[
+            {"texto": "1️⃣ Aviso único", "data": "strength_constant:no"},
+            {"texto": "📢 Constante", "data": "strength_constant:si"},
+        ], [{"texto": "❌ Cancelar", "data": "cancelar"}]],
+    )
+    return ""
+
+
+def _guardar_fuerza(chat_id, constante):
+    datos = conversaciones[chat_id]["datos"]
+    analisis = datos["strength_analysis"]
+    alerta = crypto_strength.crear_alerta(
+        chat_id,
+        datos.get("usuario", "Usuario"),
+        datos["strength_book"],
+        datos["strength_timeframe"],
+        datos["strength_mode"],
+        analisis["cambio_pct"],
+        analisis["precio_actual"],
+        datos.get("strength_threshold"),
+        constante,
+    )
+    if not alerta:
+        return "No pude guardar el análisis. Intenta nuevamente."
+    threshold = (
+        f"±{datos['strength_threshold']}%"
+        if datos.get("strength_threshold") is not None else "cruce por 0%"
+    )
+    _mostrar_fuerza_grid(
+        chat_id,
+        "✅ Análisis continuo creado\n\n"
+        f"💎 Mercado: {crypto_alerts.nombre_book(datos['strength_book'])}\n"
+        f"⏱ Temporalidad: {crypto_strength.TIMEFRAMES[datos['strength_timeframe']]['label']}\n"
+        f"📌 Cambio inicial: {crypto_strength._fmt(analisis['cambio_pct'])}\n"
+        f"🧭 Límite: {threshold}\n"
+        f"🔔 Aviso: {'constante' if constante else 'único por evento'}\n"
+        "🏦 Fuente: Coinbase Exchange",
+        [],
+    )
+    guardar_estado(chat_id, "")
+    conversaciones.pop(chat_id, None)
+    return ""
+
+
+def mostrar_lista_fuerza(chat_id, nombre_usuario, message_id=None):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    alertas = crypto_strength.listar_alertas(chat_id, solo_activas=True)
+    if not alertas:
+        return "No tienes análisis de fuerza activos. Usa /criptofuerza."
+    filas = []
+    for alerta in alertas[:20]:
+        label = crypto_strength.TIMEFRAMES.get(
+            alerta["temporalidad"], {}
+        ).get("label", alerta["temporalidad"])
+        filas.append([{
+            "texto": f"📊 {crypto_alerts.nombre_book(alerta['book'])} · {label}",
+            "data": f"strength_detail:{alerta['id']}",
+        }])
+    filas.append([{"texto": "➕ Nuevo análisis", "data": "nueva_criptofuerza"}])
+    filas.append([{"texto": "❌ Cerrar", "data": "cancelar"}])
+    conversaciones[chat_id]["datos"]["strength_message_id"] = message_id
+    conversaciones[chat_id]["id_callback"] = message_id
+    _mostrar_fuerza_grid(
+        chat_id,
+        f"📊 Análisis de fuerza activos: {len(alertas)}",
+        filas,
+        message_id,
+    )
+    return ""
+
+
+def mostrar_detalle_fuerza(chat_id, alerta_id, message_id=None):
+    alerta = crypto_strength.obtener_alerta(alerta_id, chat_id)
+    if not alerta:
+        return "No encontré ese análisis."
+    mode_labels = {
+        "fuerza": "variación de fuerza",
+        "cruce_cero": "cruce por cero",
+        "ambos": "fuerza y cruce por cero",
+    }
+    umbral = (
+        f"±{crypto_alerts.formatear_precio(alerta['umbral_pct'])}%"
+        if alerta.get("umbral_pct") is not None else "no aplica"
+    )
+    _mostrar_fuerza_grid(
+        chat_id,
+        f"📊 Análisis #{alerta['id']}\n\n"
+        f"💎 Mercado: {crypto_alerts.nombre_book(alerta['book'])}\n"
+        f"⏱ Temporalidad: {crypto_strength.TIMEFRAMES[alerta['temporalidad']]['label']}\n"
+        f"📌 Cambio de referencia: {crypto_strength._fmt(alerta['cambio_referencia_pct'])}\n"
+        f"🧭 Modo: {mode_labels.get(alerta['modo'], alerta['modo'])}\n"
+        f"🎯 Umbral: {umbral}\n"
+        f"🔔 Aviso: {'constante' if alerta.get('aviso_constante') else 'único por evento'}\n"
+        "🏦 Fuente: Coinbase Exchange",
+        [
+            [{"texto": "🎯 Recalibrar ahora", "data": f"strength_rebase:{alerta['id']}"}],
+            [{"texto": "🗑 Eliminar", "data": f"strength_delete:{alerta['id']}"}],
+            [{"texto": "⬅️ Volver", "data": "strength_list"}],
+        ],
+        message_id,
+    )
+    return ""
 
 
 def _seleccionar_crypto_book(chat_id, book):
@@ -1738,6 +2028,10 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         return iniciar_criptoalerta(chat_id, nombre_usuario)
     if texto_minusculas in ["/criptoalertas", "criptoalertas"]:
         return iniciar_gestor_criptoalertas(chat_id, nombre_usuario)
+    if texto_minusculas in ["/criptofuerza", "criptofuerza"]:
+        return iniciar_criptofuerza(chat_id, nombre_usuario)
+    if texto_minusculas in ["/criptofuerzas", "criptofuerzas"]:
+        return mostrar_lista_fuerza(chat_id, nombre_usuario)
     if texto.lower() in ["/reportar", "reportar"]:
         return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
@@ -1757,11 +2051,18 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_CRIPTO_REARME_CUSTOM,
             ESTADO_CRIPTO_LISTA,
             ESTADO_CRIPTO_DETALLE,
+            ESTADO_FUERZA_BOOK,
+            ESTADO_FUERZA_TIMEFRAME,
+            ESTADO_FUERZA_MODO,
+            ESTADO_FUERZA_UMBRAL,
+            ESTADO_FUERZA_UMBRAL_CUSTOM,
+            ESTADO_FUERZA_CONSTANTE,
         ]:
             message_id = (
                 id_callback
                 or conversaciones[chat_id]["datos"].get("gestor_message_id")
                 or conversaciones[chat_id]["datos"].get("crypto_message_id")
+                or conversaciones[chat_id]["datos"].get("strength_message_id")
                 or conversaciones[chat_id].get("id_callback")
             )
             if message_id:
@@ -1809,6 +2110,78 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             minutos,
             datos.get("aplazar_message_id"),
         )
+
+    # — CREACIÓN DE ANÁLISIS DE FUERZA —
+    if estado_actual == ESTADO_FUERZA_BOOK:
+        if texto == "strength_book_custom":
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_fuerza_grid(
+                chat_id,
+                "📊 Escribe el par exacto, por ejemplo ADA/USD o BTC/USD.",
+                [],
+            )
+            return ""
+        if texto.startswith("strength_book:"):
+            texto = texto.split(":", 1)[1]
+        return _seleccionar_fuerza_book(chat_id, texto)
+
+    if estado_actual == ESTADO_FUERZA_TIMEFRAME:
+        if not texto.startswith("strength_tf:"):
+            return "Selecciona una temporalidad con los botones."
+        return _seleccionar_fuerza_timeframe(chat_id, texto.split(":", 1)[1])
+
+    if estado_actual == ESTADO_FUERZA_MODO:
+        if not texto.startswith("strength_mode:"):
+            return "Selecciona el tipo de análisis."
+        mode = texto.split(":", 1)[1]
+        if mode not in ("fuerza", "cruce_cero", "ambos"):
+            return "Tipo de análisis inválido."
+        analisis = conversaciones[chat_id]["datos"]["strength_analysis"]
+        if mode in ("fuerza", "ambos") and abs(
+            Decimal(str(analisis["cambio_pct"]))
+        ) < crypto_strength.MIN_BASELINE_CHANGE:
+            return "La referencia está demasiado cerca de cero; elige cruce por 0%."
+        conversaciones[chat_id]["datos"]["strength_mode"] = mode
+        if mode == "cruce_cero":
+            return _mostrar_constante_fuerza(chat_id)
+        return _mostrar_umbral_fuerza(chat_id)
+
+    if estado_actual == ESTADO_FUERZA_UMBRAL:
+        if texto == "strength_threshold_custom":
+            conversaciones[chat_id]["estado"] = ESTADO_FUERZA_UMBRAL_CUSTOM
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_fuerza_grid(
+                chat_id,
+                "✍️ Escribe un porcentaje entre 1 y 500. Ejemplo: 20",
+                [],
+            )
+            return ""
+        if not texto.startswith("strength_threshold:"):
+            return "Selecciona un umbral."
+        texto = texto.split(":", 1)[1]
+        try:
+            value = Decimal(texto.replace(",", "."))
+        except InvalidOperation:
+            return "Umbral inválido."
+        if value < 1 or value > 500:
+            return "El umbral debe estar entre 1% y 500%."
+        conversaciones[chat_id]["datos"]["strength_threshold"] = str(value)
+        return _mostrar_constante_fuerza(chat_id)
+
+    if estado_actual == ESTADO_FUERZA_UMBRAL_CUSTOM:
+        try:
+            value = Decimal(str(texto).replace("%", "").replace(",", ".").strip())
+        except InvalidOperation:
+            return "Escribe un porcentaje válido entre 1 y 500."
+        if value < 1 or value > 500:
+            return "El porcentaje debe estar entre 1 y 500."
+        conversaciones[chat_id]["datos"]["strength_threshold"] = str(value)
+        return _mostrar_constante_fuerza(chat_id)
+
+    if estado_actual == ESTADO_FUERZA_CONSTANTE:
+        if texto not in ("strength_constant:no", "strength_constant:si"):
+            return "Selecciona aviso único o constante."
+        return _guardar_fuerza(chat_id, texto.endswith(":si"))
 
     # — CREACIÓN DE CRIPTOALERTA —
     if estado_actual == ESTADO_CRIPTO_BOOK:
@@ -2949,6 +3322,8 @@ def mostrar_ayuda(nombre_usuario):
     mensaje += "• /buscar - Buscar por nombre, descripción o ID\n"
     mensaje += "• /criptoalerta - Crear una alerta de precio premium\n"
     mensaje += "• /criptoalertas - Administrar alertas de criptomonedas\n"
+    mensaje += "• /criptofuerza - Crear análisis de cambio e impulso\n"
+    mensaje += "• /criptofuerzas - Administrar análisis de fuerza\n"
     mensaje += "• /reportar - Reportar un problema o incidencia\n"
     mensaje += "• /ayuda - Mostrar este mensaje de ayuda\n\n"
     mensaje += "También puedes aplazar un aviso 5, 10, 20 minutos o elegir un tiempo personalizado.\n\n"
@@ -3163,6 +3538,60 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             "detenida o que no pertenezca a tu cuenta."
         )
 
+    if callback_data.startswith("strength_stop:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "No pude identificar el análisis."
+        if crypto_strength.detener_constante(alerta_id, chat_id):
+            if id_callback:
+                editar_mensaje_con_grid(
+                    chat_id,
+                    id_callback,
+                    "🛑 Aviso constante detenido\n\n"
+                    "El análisis continúa, pero dejó de insistir. Volverá a "
+                    "armarse automáticamente cuando salga del umbral.",
+                    [],
+                )
+            return ""
+        return "No pude detener ese aviso de fuerza."
+
+    if callback_data.startswith("strength_detail:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Análisis inválido."
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return mostrar_detalle_fuerza(chat_id, alerta_id, id_callback)
+
+    if callback_data.startswith("strength_delete:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Análisis inválido."
+        if crypto_strength.eliminar_alerta(alerta_id, chat_id):
+            if id_callback:
+                editar_mensaje_con_grid(
+                    chat_id, id_callback, "🗑 Análisis eliminado.", []
+                )
+            return ""
+        return "No pude eliminar ese análisis."
+
+    if callback_data.startswith("strength_rebase:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+            result = crypto_strength.recalibrar_alerta(alerta_id, chat_id)
+        except Exception as exc:
+            print(f"[ERROR] No se pudo recalibrar el análisis {alerta_id}: {exc}")
+            return f"No pude recalibrar: {exc}"
+        if not result:
+            return "No encontré ese análisis."
+        alerta, analysis = result
+        return mostrar_detalle_fuerza(chat_id, alerta["id"], id_callback)
+
+    if callback_data == "strength_list":
+        return mostrar_lista_fuerza(chat_id, nombre_usuario, id_callback)
+
     # Entradas globales desde /start: deben abrir un flujo nuevo aunque exista
     # otra conversación con botones pendiente.
     if callback_data == "nueva_criptoalerta":
@@ -3175,6 +3604,12 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
         return iniciar_gestor_criptoalertas(
             chat_id, nombre_usuario, message_id=id_callback
         )
+    if callback_data == "nueva_criptofuerza":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return iniciar_criptofuerza(chat_id, nombre_usuario, id_callback)
+    if callback_data == "gestor_criptofuerzas":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return mostrar_lista_fuerza(chat_id, nombre_usuario, id_callback)
 
     if chat_id in conversaciones:
         if conversaciones[chat_id].get("wait_callback", False):

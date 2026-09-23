@@ -14,6 +14,7 @@ os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 import conversations
 import crypto_alerts
+import crypto_strength
 import reminders
 
 
@@ -430,6 +431,60 @@ class CryptoProviderTests(unittest.TestCase):
             crypto_alerts.obtener_ticker_coinbase("fet_usd")
 
 
+class CryptoStrengthTests(unittest.TestCase):
+    def test_strength_matches_user_example(self):
+        result = crypto_strength.calcular_variacion_fuerza("1.5", "2.5")
+        self.assertEqual(result, Decimal("-40.0"))
+
+    def test_near_zero_baseline_is_rejected_for_strength(self):
+        self.assertIsNone(
+            crypto_strength.calcular_variacion_fuerza("0.2", "0.01")
+        )
+
+    def test_force_limits_and_zero_crossing_are_independent(self):
+        alert = {
+            "modo": "ambos",
+            "umbral_pct": "20",
+            "cambio_referencia_pct": "2.5",
+        }
+        hits, strength = crypto_strength.evaluar_condicion(
+            alert, {"cambio_pct": Decimal("1.5")}
+        )
+        self.assertEqual(hits, ["fuerza_baja"])
+        self.assertEqual(strength, Decimal("-40.0"))
+
+        hits, strength = crypto_strength.evaluar_condicion(
+            alert, {"cambio_pct": Decimal("-0.1")}
+        )
+        self.assertIn("fuerza_baja", hits)
+        self.assertIn("cruce_bajista", hits)
+
+    @patch("crypto_strength.requests.get")
+    def test_analysis_uses_exact_pair_and_window_close(self, get):
+        now = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
+        candle = Mock(status_code=200)
+        candle.raise_for_status.return_value = None
+        candle.json.return_value = [[
+            int(datetime(2026, 9, 23, 8, 55, tzinfo=timezone.utc).timestamp()),
+            99,
+            101,
+            100,
+            100,
+            10,
+        ]]
+        ticker = Mock(status_code=200)
+        ticker.raise_for_status.return_value = None
+        ticker.json.return_value = {"price": "102.5"}
+        get.side_effect = [candle, ticker]
+
+        result = crypto_strength.obtener_analisis("ada_usd", "1h", ahora=now)
+
+        self.assertEqual(result["product_id"], "ADA-USD")
+        self.assertEqual(result["cambio_pct"], Decimal("2.500"))
+        self.assertIn("ADA-USD/candles", get.call_args_list[0].args[0])
+        self.assertIn("ADA-USD/ticker", get.call_args_list[1].args[0])
+
+
 class BitsoStreamTests(unittest.TestCase):
     def test_trade_message_updates_latest_price(self):
         stream = crypto_alerts.BitsoPriceStream()
@@ -567,6 +622,63 @@ class CryptoConversationTests(unittest.TestCase):
         self.assertEqual(response, "")
         stop_alert.assert_called_once_with(9, "42")
         edit_grid.assert_called_once()
+
+    def test_complete_strength_alert_flow(self):
+        conversations.conversaciones["42"] = {
+            "estado": "",
+            "wait_callback": False,
+            "id_callback": None,
+            "datos": {"usuario": "Andy", "zona_horaria": "UTC"},
+            "recordatorios_aviso_constante": {},
+        }
+        response = Mock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 900}},
+        )
+        analysis = {
+            "book": "ada_usd",
+            "product_id": "ADA-USD",
+            "temporalidad": "1h",
+            "temporalidad_label": "1 hora",
+            "precio_actual": Decimal("0.25"),
+            "precio_referencia": Decimal("0.243902439"),
+            "cambio_pct": Decimal("2.5"),
+            "referencia_en": "2026-09-23T09:00:00+00:00",
+            "consultado_en": "2026-09-23T10:00:00+00:00",
+            "provider": "coinbase_exchange",
+            "provider_label": "Coinbase Exchange",
+            "price_type": "ticker y cierre de vela",
+        }
+        with (
+            patch("conversations.crypto_alerts.es_usuario_premium", return_value=True),
+            patch("conversations.crypto_strength.validar_producto"),
+            patch("conversations.crypto_strength.obtener_analisis", return_value=analysis),
+            patch("conversations.crypto_strength.crear_alerta", return_value={"id": 12}) as create,
+            patch("conversations.enviar_mensaje_con_grid", return_value=response),
+            patch("conversations.editar_mensaje_con_grid", return_value=response),
+            patch("conversations.supabase_db.upsert_chat_info"),
+            patch("conversations.guardar_estado"),
+            patch(
+                "conversations.inicializar_conversaciones",
+                side_effect=lambda *_args, **_kwargs: conversations.conversaciones,
+            ),
+        ):
+            conversations.iniciar_criptofuerza("42", "Andy")
+            for callback in (
+                "strength_book:ada_usd",
+                "strength_tf:1h",
+                "strength_mode:ambos",
+                "strength_threshold:20",
+                "strength_constant:si",
+            ):
+                conversations.procesar_callback(
+                    "42", callback, "Andy", "private", 900
+                )
+
+        create.assert_called_once_with(
+            "42", "Andy", "ada_usd", "1h", "ambos", "2.5", "0.25", "20", True
+        )
+        self.assertNotIn("42", conversations.conversaciones)
 
 
 class UnifiedManagerTests(unittest.TestCase):

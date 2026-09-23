@@ -345,6 +345,38 @@ def crear_tablas_criptoalertas(supabase: Client):
         CREATE INDEX IF NOT EXISTS idx_cripto_alertas_estado_book
             ON cripto_alertas (estado, book);
 
+        CREATE TABLE IF NOT EXISTS cripto_fuerza_alertas (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            temporalidad TEXT NOT NULL
+                CHECK (temporalidad IN ('1m', '5m', '30m', '1h', '4h', '1d')),
+            modo TEXT NOT NULL
+                CHECK (modo IN ('fuerza', 'cruce_cero', 'ambos')),
+            umbral_pct NUMERIC(18, 8),
+            cambio_referencia_pct NUMERIC(18, 8) NOT NULL,
+            precio_referencia_inicial NUMERIC(38, 18) NOT NULL,
+            aviso_constante BOOLEAN NOT NULL DEFAULT FALSE,
+            aviso_detenido BOOLEAN NOT NULL DEFAULT FALSE,
+            condicion_activa BOOLEAN NOT NULL DEFAULT FALSE,
+            lado_activo TEXT,
+            ultima_notificacion_en TIMESTAMPTZ,
+            ultimo_cambio_pct NUMERIC(18, 8),
+            ultima_fuerza_pct NUMERIC(18, 8),
+            ultimo_precio NUMERIC(38, 18),
+            ultima_consulta_en TIMESTAMPTZ,
+            estado TEXT NOT NULL DEFAULT 'activa'
+                CHECK (estado IN ('activa', 'pausada')),
+            fuente TEXT NOT NULL DEFAULT 'coinbase_exchange',
+            creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_cripto_fuerza_chat
+            ON cripto_fuerza_alertas (chat_id);
+        CREATE INDEX IF NOT EXISTS idx_cripto_fuerza_estado_mercado
+            ON cripto_fuerza_alertas (estado, book, temporalidad);
+
         NOTIFY pgrst, 'reload schema';
         """
         supabase.rpc("exec_sql", {"sql": sql}).execute()

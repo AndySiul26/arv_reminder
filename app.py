@@ -12,6 +12,7 @@ from crypto_alerts import (
     iniciar_monitor_criptoalertas,
     detener_monitor_criptoalertas,
 )
+from crypto_strength import iniciar_monitor_fuerza, detener_monitor_fuerza
 from routes import routes  # nuestro nuevo módulo de rutas
 
 MODO_TESTER = False
@@ -30,6 +31,7 @@ def cerrar_aplicacion():
     """Cierra correctamente los recursos al terminar la aplicación."""
     print("Cerrando aplicación...")
     detener_monitor_criptoalertas()
+    detener_monitor_fuerza()
     detener_administrador()
     print("Recursos liberados")
     print("Estableciendo servidor remoto...")
@@ -51,6 +53,7 @@ else:
     app.config['MAINTENANCE_MODE'] = False
     iniciar_administrador()
     iniciar_monitor_criptoalertas()
+    iniciar_monitor_fuerza()
 # Registrar cierre limpio
 atexit.register(cerrar_aplicacion)
 signal.signal(signal.SIGINT, lambda s,f: cerrar_aplicacion())

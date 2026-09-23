@@ -154,6 +154,8 @@ Las respuestas se envían directamente a la API HTTP de Telegram desde
 | `/buscar` | Busca por nombre, descripción o ID. |
 | `/criptoalerta` | Crea una alerta premium con Bitso y respaldo Coinbase Spot. |
 | `/criptoalertas` | Administra, edita, reactiva o elimina criptoalertas. |
+| `/criptofuerza` | Crea un análisis continuo de cambio e impulso porcentual. |
+| `/criptofuerzas` | Consulta, recalibra o elimina análisis de fuerza. |
 | `/pendientes` | Alias compatible que abre el gestor filtrado por pendientes. |
 | `/editar` | Alias compatible que abre el gestor principal. |
 | `/reportar` | Inicia el registro de una incidencia. |
@@ -381,6 +383,42 @@ DO UPDATE SET activo = TRUE, actualizado_en = NOW();
 
 Para retirar el acceso sin borrar sus alertas, establecer `activo = FALSE`.
 
+### Análisis porcentual de fuerza
+
+`/criptofuerza` crea una alerta premium basada en velas públicas de Coinbase
+Exchange. El flujo solicita el par exacto, temporalidad, tipo de análisis,
+umbral y modo de aviso. Las temporalidades disponibles son 1 minuto, 5 minutos,
+30 minutos, 1 hora, 4 horas y 1 día.
+
+Para cada revisión se calcula primero el cambio móvil de precio:
+
+```text
+cambio = (precio_actual / precio_al_inicio_de_la_ventana - 1) × 100
+```
+
+Al crear la alerta, ese cambio se guarda como referencia. La variación de fuerza
+posterior se calcula así:
+
+```text
+fuerza = (cambio_actual - cambio_referencia) / |cambio_referencia| × 100
+```
+
+Por ejemplo, pasar de un cambio de `+2.5%` a `+1.5%` produce una variación de
+fuerza de `-40%`. El usuario puede vigilar un umbral simétrico —por ejemplo
+`≤ -20%` o `≥ +20%`—, un cruce por cero, o ambas condiciones. Una referencia
+con magnitud inferior a `0.05%` no admite cálculo de fuerza porque la división
+sería inestable; en ese caso sólo se ofrece el cruce por cero.
+
+El aviso único se emite una vez al entrar en la condición y se rearma al salir.
+El aviso constante se repite aproximadamente cada minuto mientras continúe la
+condición. El botón Detener silencia la insistencia actual; cuando el indicador
+sale del umbral se calma y se rearma automáticamente. `/criptofuerzas` permite
+consultar, recalibrar la referencia con el mercado actual o eliminar el análisis.
+
+Los mensajes muestran proveedor, par, temporalidad, precio actual, precio al
+inicio de la ventana, cambio actual, referencia y variación de fuerza. No se
+sustituye una moneda cotizada por otra.
+
 ### Reportes
 
 `/reportar` solicita una descripción del problema. El reporte se guarda en la
@@ -443,6 +481,7 @@ consulta, edición y envío.
 | `chats_avisados_actualizaciones` | Última actualización recibida por cada chat. |
 | `modo_tester` | Interruptor global del modo tester. |
 | `cripto_alertas` | Banda, modo, rearme y estado de cada criptoalerta. |
+| `cripto_fuerza_alertas` | Temporalidad, referencia, umbral y estado del análisis de fuerza. |
 | `cripto_premium_users` | Usuarios autorizados para las funciones premium. |
 
 #### Campos principales de `recordatorios`
@@ -569,6 +608,10 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `COINBASE_TIMEOUT_SECONDS` | No | Tiempo máximo de Coinbase; por defecto 10 segundos. |
 | `CRYPTO_FALLBACK_CONFIRMATIONS` | No | Lecturas consecutivas para aceptar un cambio de fuente; mínimo 2. |
 | `CRYPTO_ALERT_INTERVAL_SECONDS` | No | Frecuencia del monitor; mínimo y valor predeterminado: 60 segundos. |
+| `COINBASE_EXCHANGE_URL` | No | Velas y ticker públicos; por defecto `https://api.exchange.coinbase.com`. |
+| `CRYPTO_STRENGTH_TIMEOUT_SECONDS` | No | Tiempo máximo por consulta histórica; predeterminado: 10 segundos. |
+| `CRYPTO_STRENGTH_INTERVAL_SECONDS` | No | Frecuencia del análisis continuo; mínimo: 60 segundos. |
+| `CRYPTO_STRENGTH_CONSTANT_INTERVAL_SECONDS` | No | Frecuencia mínima del aviso constante de fuerza; mínimo: 60 segundos. |
 
 Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
 y callbacks, y aceptan `TELEGRAM_TOKEN` como variable principal.
