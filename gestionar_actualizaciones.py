@@ -160,7 +160,7 @@ def actualizar_id_ultima_actualizacion_para_chat(chat_id: str, nuevo_id: int):
             .update({"id_ultima_actualizacion": nuevo_id}) \
             .eq("chat_id", chat_id) \
             .execute()
-        print(f"Actualización de estado para {chat_id} -> id actualizado a {nuevo_id}")
+        print(f"Estado de entrega actualizado al ID {nuevo_id}")
     except Exception as e:
         print(f"❌ Error al actualizar id_ultima_actualizacion para {chat_id}: {e}")
 
