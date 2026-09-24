@@ -1,0 +1,22 @@
+TITULO: 🧠 Alertas inteligentes multitemporales
+DESCRIPCION:
+¡Hola! 👋 ARV Reminder ahora puede ayudarte a seguir oportunidades de compra y venta con mayor contexto:
+
+🔬 *Calibración histórica automática*
+• El bot analiza velas y giros anteriores del mismo mercado.
+• Recomienda periodos, pérdida de fuerza, margen de seguridad y actividad extraordinaria.
+• Puedes elegir un perfil rápido, equilibrado o confirmado.
+
+⏱ *Análisis multitemporal*
+• Una estrategia de 1 hora también revisa 30, 10 y 5 minutos.
+• Combina fuerza, volumen y ritmo reciente de operaciones para detectar agotamiento temprano.
+• Exige persistencia y varias confirmaciones para reducir rebotes falsos.
+
+🔕 *Control sin perder protecciones*
+• Cada particularidad puede silenciarse por separado.
+• Las demás condiciones continúan vigilando la oportunidad.
+• También puedes pausar, reanudar o eliminar toda la estrategia.
+
+Entra en /criptoalerta y selecciona “Alerta inteligente”.
+
+Este análisis es probabilístico e informativo; no garantiza máximos o mínimos ni constituye asesoría financiera.

@@ -429,6 +429,43 @@ Los mensajes muestran proveedor, par, temporalidad, precio actual, precio al
 inicio de la ventana, cambio actual, referencia y variación de fuerza. No se
 sustituye una moneda cotizada por otra.
 
+### Alertas inteligentes multitemporales
+
+Desde `/criptoalerta` o el menú principal se puede elegir **Alerta
+inteligente**. Es una estrategia informativa con estado para seguir una posible
+venta o compra después de alcanzar un precio objetivo; no ejecuta operaciones.
+
+Al crearla se eligen par, dirección, precio objetivo, temporalidad principal y
+perfil (`Rápido`, `Equilibrado` o `Confirmado`). El bot descarga una muestra de
+velas cerradas de Coinbase Exchange y calibra una sola vez:
+
+- Cantidad de periodos para el promedio de fuerza.
+- Pérdida de fuerza frente al promedio.
+- Pérdida desde el pico de impulso.
+- Margen de seguridad alrededor del objetivo.
+- Actividad extraordinaria de volumen/trades.
+- Cantidad de temporalidades que deben coincidir.
+- Persistencia mínima para descartar rebotes de una sola lectura.
+
+Una estrategia principal de una hora combina automáticamente 30, 10 y 5
+minutos. Las velas de 10 y 30 minutos se agregan sin cambiar el par ni la moneda.
+La hora establece el contexto y los marcos menores detectan deterioro temprano.
+Además del volumen relativo se consulta la tasa reciente de trades; la cantidad
+de operaciones por sí sola nunca decide la dirección.
+
+La estrategia pasa por `esperando`, `vigilando` y `pausada`. Al cruzar el precio
+objetivo envía un aviso inicial. Después vigila independientemente el
+debilitamiento contra el promedio, la pérdida fuerte de impulso, la coincidencia
+multitemporal y el margen de seguridad. Los avisos persistentes se espacian al
+menos cinco minutos. Cada mensaje permite silenciar solamente esa
+particularidad; al recuperarse, se rearma sin apagar las demás protecciones.
+También se puede suspender o eliminar la estrategia completa desde
+`/criptoalertas`.
+
+El informe guarda proveedor, rango histórico, velas, giros comparables y calidad
+de muestra. Es un análisis probabilístico y reproducible, no una garantía del
+máximo o mínimo futuro ni asesoría financiera.
+
 ### Reportes
 
 `/reportar` solicita una descripción del problema. El reporte se guarda en la
@@ -499,6 +536,7 @@ consulta, edición y envío.
 | `modo_tester` | Interruptor global del modo tester. |
 | `cripto_alertas` | Banda, modo, rearme y estado de cada criptoalerta. |
 | `cripto_fuerza_alertas` | Temporalidad, referencia, umbral y estado del análisis de fuerza. |
+| `cripto_alertas_inteligentes` | Calibración histórica, estado y condiciones multitemporales. |
 | `cripto_premium_users` | Usuarios autorizados para las funciones premium. |
 
 #### Campos principales de `recordatorios`
@@ -556,6 +594,10 @@ Se respaldan:
 - `actualizaciones_info`.
 - `chats_avisados_actualizaciones`.
 - `reportes`.
+- `cripto_premium_users`.
+- `cripto_alertas`.
+- `cripto_fuerza_alertas`.
+- `cripto_alertas_inteligentes`.
 
 `modo_tester` no forma parte del respaldo actual. Este PostgreSQL tampoco se usa
 automáticamente como origen alternativo si Supabase cae; es una réplica para
@@ -629,6 +671,9 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `CRYPTO_STRENGTH_TIMEOUT_SECONDS` | No | Tiempo máximo por consulta histórica; predeterminado: 10 segundos. |
 | `CRYPTO_STRENGTH_INTERVAL_SECONDS` | No | Frecuencia del análisis continuo; mínimo: 60 segundos. |
 | `CRYPTO_STRENGTH_CONSTANT_INTERVAL_SECONDS` | No | Frecuencia mínima del aviso constante de fuerza; mínimo: 60 segundos. |
+| `CRYPTO_SMART_INTERVAL_SECONDS` | No | Frecuencia del monitor inteligente; mínimo: 60 segundos. |
+| `CRYPTO_SMART_REPEAT_SECONDS` | No | Separación de seguimientos persistentes; mínimo: 180, predeterminado: 300 segundos. |
+| `CRYPTO_SMART_HISTORY_CANDLES` | No | Velas para calibración inicial; entre 300 y 1800, predeterminado: 900. |
 
 Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
 y callbacks, y aceptan `TELEGRAM_TOKEN` como variable principal.

@@ -82,6 +82,7 @@ def manejar_mensaje(data):
                 {"texto": "📋 Gestionar Recordatorios", "data": "gestor_recordatorios"},
                 {"texto": "🔎 Buscar Recordatorios", "data": "buscar_recordatorios"},
                 {"texto": "💎 Nueva Criptoalerta", "data": "nueva_criptoalerta"},
+                {"texto": "🧠 Alerta inteligente", "data": "smart_start"},
                 {"texto": "📈 Gestionar Criptoalertas", "data": "gestor_criptoalertas"},
                 {"texto": "📊 Nuevo análisis de fuerza", "data": "nueva_criptofuerza"},
                 {"texto": "🧭 Gestionar fuerza", "data": "gestor_criptofuerzas"}

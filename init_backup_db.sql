@@ -125,6 +125,40 @@ CREATE TABLE IF NOT EXISTS cripto_fuerza_alertas (
     actualizado_en TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS cripto_alertas_inteligentes (
+    id BIGINT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    usuario TEXT,
+    book TEXT NOT NULL,
+    direccion TEXT NOT NULL,
+    precio_objetivo NUMERIC(38, 18) NOT NULL,
+    temporalidad TEXT NOT NULL,
+    perfil TEXT NOT NULL,
+    periodos_promedio INTEGER NOT NULL,
+    perdida_promedio_pct NUMERIC(18, 8) NOT NULL,
+    perdida_fuerza_pct NUMERIC(18, 8) NOT NULL,
+    margen_precio_pct NUMERIC(18, 8) NOT NULL,
+    actividad_ratio NUMERIC(18, 8) NOT NULL,
+    confirmaciones_requeridas INTEGER DEFAULT 2,
+    persistencia_requerida INTEGER DEFAULT 2,
+    subtemporalidades JSONB DEFAULT '[]'::jsonb,
+    reporte_calibracion JSONB DEFAULT '{}'::jsonb,
+    estado TEXT DEFAULT 'esperando',
+    condiciones_activas JSONB DEFAULT '{}'::jsonb,
+    condiciones_silenciadas JSONB DEFAULT '{}'::jsonb,
+    conteos_condiciones JSONB DEFAULT '{}'::jsonb,
+    ultimas_notificaciones JSONB DEFAULT '{}'::jsonb,
+    ultimo_precio NUMERIC(38, 18),
+    ultima_fuerza_pct NUMERIC(18, 8),
+    fuerza_promedio_pct NUMERIC(18, 8),
+    fuerza_pico_pct NUMERIC(18, 8),
+    ultima_consulta_en TIMESTAMPTZ,
+    ultimo_mensaje_id BIGINT,
+    fuente TEXT DEFAULT 'coinbase_exchange',
+    creado_en TIMESTAMPTZ DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Tabla de metadatos de backup
 CREATE TABLE IF NOT EXISTS _backup_metadata (
     id SERIAL PRIMARY KEY,

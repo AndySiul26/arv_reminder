@@ -13,6 +13,7 @@ from crypto_alerts import (
     detener_monitor_criptoalertas,
 )
 from crypto_strength import iniciar_monitor_fuerza, detener_monitor_fuerza
+from crypto_smart import iniciar_monitor_inteligente, detener_monitor_inteligente
 from webhook_utils import iniciar_guardian_webhook, detener_guardian_webhook
 from routes import routes  # nuestro nuevo módulo de rutas
 
@@ -33,6 +34,7 @@ def cerrar_aplicacion():
     print("Cerrando aplicación...")
     detener_monitor_criptoalertas()
     detener_monitor_fuerza()
+    detener_monitor_inteligente()
     detener_guardian_webhook()
     detener_administrador()
     print("Recursos liberados")
@@ -56,6 +58,7 @@ else:
     iniciar_administrador()
     iniciar_monitor_criptoalertas()
     iniciar_monitor_fuerza()
+    iniciar_monitor_inteligente()
     if not LOCAL_MODE:
         iniciar_guardian_webhook()
 # Registrar cierre limpio

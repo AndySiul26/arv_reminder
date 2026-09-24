@@ -7,6 +7,7 @@ from services import enviar_telegram, editar_botones_mensaje, editar_mensaje_con
 import supabase_db
 import crypto_alerts
 import crypto_strength
+import crypto_smart
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
 import utilidades, os
@@ -61,6 +62,14 @@ ESTADO_FUERZA_CAMBIO_BANDA   = "fuerza_cambio_banda"
 ESTADO_FUERZA_CAMBIO_MIN     = "fuerza_cambio_min"
 ESTADO_FUERZA_CAMBIO_MAX     = "fuerza_cambio_max"
 ESTADO_FUERZA_CONSTANTE      = "fuerza_constante"
+# — ESTADOS ALERTA INTELIGENTE —
+ESTADO_SMART_BOOK            = "smart_book"
+ESTADO_SMART_DIRECCION       = "smart_direccion"
+ESTADO_SMART_OBJETIVO        = "smart_objetivo"
+ESTADO_SMART_TIMEFRAME       = "smart_timeframe"
+ESTADO_SMART_PERFIL          = "smart_perfil"
+ESTADO_SMART_LISTA           = "smart_lista"
+ESTADO_SMART_DETALLE         = "smart_detalle"
 CRIPTO_POR_PAGINA = 5
 CRYPTO_LIVE_UPDATE_SECONDS = max(
     10, int(os.getenv("CRYPTO_LIVE_UPDATE_SECONDS", "10"))
@@ -569,6 +578,7 @@ def iniciar_criptoalerta(chat_id, nombre_usuario, message_id=None):
             {"texto": "XRP/MXN", "data": "crypto_book:xrp_mxn"},
         ],
         [{"texto": "✍️ Escribir otro mercado", "data": "crypto_book_custom"}],
+        [{"texto": "🧠 Crear alerta inteligente", "data": "smart_start"}],
         [{"texto": "❌ Cancelar", "data": "cancelar"}],
     ]
     _mostrar_crypto_grid(
@@ -592,6 +602,276 @@ def _normalizar_book(texto):
         .replace("-", "_")
         .replace(" ", "")
     )
+
+
+def _mostrar_smart_grid(chat_id, mensaje, filas, message_id=None):
+    datos = conversaciones[chat_id]["datos"]
+    message_id = (
+        message_id
+        or datos.get("smart_message_id")
+        or conversaciones[chat_id].get("id_callback")
+    )
+    if message_id:
+        response = editar_mensaje_con_grid(chat_id, message_id, mensaje, filas)
+        if response and response.status_code == 200:
+            datos["smart_message_id"] = message_id
+            conversaciones[chat_id]["id_callback"] = message_id
+            return response
+    response = enviar_mensaje_con_grid(chat_id, mensaje, filas)
+    if response and response.status_code == 200:
+        try:
+            message_id = response.json()["result"]["message_id"]
+            datos["smart_message_id"] = message_id
+            conversaciones[chat_id]["id_callback"] = message_id
+        except (KeyError, TypeError, ValueError):
+            pass
+    return response
+
+
+def iniciar_criptointeligente(chat_id, nombre_usuario, message_id=None):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    datos = conversaciones[chat_id]["datos"]
+    for key in list(datos):
+        if key.startswith("smart_"):
+            datos.pop(key, None)
+    if message_id:
+        datos["smart_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_BOOK
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_smart_grid(
+        chat_id,
+        "🧠 Alerta inteligente multitemporal\n\n"
+        "El bot calibrará automáticamente fuerza, agotamiento, actividad y "
+        "margen de seguridad con el histórico del mismo mercado.",
+        [
+            [
+                {"texto": "ADA/USD", "data": "smart_book:ada_usd"},
+                {"texto": "BTC/USD", "data": "smart_book:btc_usd"},
+            ],
+            [
+                {"texto": "ETH/USD", "data": "smart_book:eth_usd"},
+                {"texto": "SOL/USD", "data": "smart_book:sol_usd"},
+            ],
+            [{"texto": "✍️ Escribir otro par", "data": "smart_book_custom"}],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+        message_id,
+    )
+    return ""
+
+
+def _seleccionar_smart_book(chat_id, raw):
+    book = _normalizar_book(raw)
+    try:
+        crypto_strength.validar_producto(book)
+    except Exception as exc:
+        conversaciones[chat_id]["wait_callback"] = False
+        return f"No puedo analizar ese par en Coinbase Exchange: {exc}"
+    conversaciones[chat_id]["datos"]["smart_book"] = book
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_DIRECCION
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_smart_grid(
+        chat_id,
+        f"🧠 {crypto_alerts.nombre_book(book)}\n\n¿Qué oportunidad deseas vigilar?",
+        [[
+            {"texto": "📈 Mejor venta posible", "data": "smart_direction:venta"},
+            {"texto": "📉 Mejor compra posible", "data": "smart_direction:compra"},
+        ], [{"texto": "❌ Cancelar", "data": "cancelar"}]],
+    )
+    return ""
+
+
+def _pedir_smart_objetivo(chat_id, direction):
+    if direction not in ("compra", "venta"):
+        return "Dirección inválida."
+    datos = conversaciones[chat_id]["datos"]
+    datos["smart_direction"] = direction
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_OBJETIVO
+    conversaciones[chat_id]["wait_callback"] = False
+    _mostrar_smart_grid(
+        chat_id,
+        "🎯 Escribe el precio objetivo absoluto.\n\n"
+        + ("Ejemplo: 0.30. La vigilancia avanzada comenzará cuando el precio suba hasta ahí."
+           if direction == "venta" else
+           "Ejemplo: 0.23. La vigilancia avanzada comenzará cuando el precio baje hasta ahí."),
+        [],
+    )
+    return ""
+
+
+def _seleccionar_smart_objetivo(chat_id, raw):
+    value = crypto_alerts.parsear_precio(raw)
+    if value is None or value <= 0:
+        return "Escribe un precio objetivo válido y mayor que cero."
+    conversaciones[chat_id]["datos"]["smart_target"] = str(value)
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_TIMEFRAME
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_smart_grid(
+        chat_id,
+        "⏱ Selecciona la temporalidad principal.\n\n"
+        "Las temporalidades menores se analizarán automáticamente para detectar giros tempranos.",
+        [
+            [
+                {"texto": "30 minutos", "data": "smart_tf:30m"},
+                {"texto": "1 hora", "data": "smart_tf:1h"},
+            ],
+            [
+                {"texto": "4 horas", "data": "smart_tf:4h"},
+                {"texto": "1 día", "data": "smart_tf:1d"},
+            ],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
+def _seleccionar_smart_timeframe(chat_id, timeframe):
+    if timeframe not in crypto_smart.PRIMARY_TIMEFRAMES:
+        return "Temporalidad inteligente inválida."
+    conversaciones[chat_id]["datos"]["smart_timeframe"] = timeframe
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_PERFIL
+    conversaciones[chat_id]["wait_callback"] = True
+    subs = ", ".join(crypto_smart.PRIMARY_TIMEFRAMES[timeframe]["subs"])
+    _mostrar_smart_grid(
+        chat_id,
+        f"🧪 Perfil de calibración\n\nMarco principal: {crypto_smart.PRIMARY_TIMEFRAMES[timeframe]['label']}\n"
+        f"Confirmaciones internas: {subs}\n\n"
+        "Rápido reacciona antes; Confirmado exige más coincidencias. Equilibrado es la recomendación inicial.",
+        [
+            [{"texto": "⚡ Rápido", "data": "smart_profile:rapido"}],
+            [{"texto": "⚖️ Equilibrado", "data": "smart_profile:equilibrado"}],
+            [{"texto": "🛡 Confirmado", "data": "smart_profile:confirmado"}],
+            [{"texto": "❌ Cancelar", "data": "cancelar"}],
+        ],
+    )
+    return ""
+
+
+def _guardar_smart_calibrada(chat_id, profile):
+    if profile not in crypto_smart.PROFILE_LABELS:
+        return "Perfil inválido."
+    datos = conversaciones[chat_id]["datos"]
+    _mostrar_smart_grid(
+        chat_id,
+        "🔬 Analizando movimientos históricos…\n\n"
+        "Estoy comparando giros, fuerza, actividad y retrocesos. Puede tardar unos segundos.",
+        [],
+    )
+    try:
+        calibration = crypto_smart.analizar_historico(
+            datos["smart_book"], datos["smart_direction"],
+            datos["smart_timeframe"], profile,
+        )
+    except Exception as exc:
+        conversaciones[chat_id]["wait_callback"] = True
+        _mostrar_smart_grid(
+            chat_id,
+            f"No pude completar el análisis histórico: {exc}\n\nPuedes reintentarlo sin perder la configuración.",
+            [[{"texto": "🔄 Reintentar", "data": f"smart_profile:{profile}"}],
+             [{"texto": "❌ Cancelar", "data": "cancelar"}]],
+        )
+        return ""
+    alert = crypto_smart.crear_alerta(
+        chat_id, datos.get("usuario", "Usuario"), datos["smart_book"],
+        datos["smart_direction"], datos["smart_target"], datos["smart_timeframe"],
+        profile, calibration,
+    )
+    if not alert:
+        return "El análisis terminó, pero no pude guardar la alerta inteligente."
+    report = calibration["report"]
+    _mostrar_smart_grid(
+        chat_id,
+        "✅ Alerta inteligente calibrada\n\n"
+        f"💎 Mercado: {crypto_alerts.nombre_book(datos['smart_book'])}\n"
+        f"🧭 Objetivo: {datos['smart_direction']} en {crypto_alerts.formatear_precio(datos['smart_target'])}\n"
+        f"⏱ Principal: {crypto_smart.PRIMARY_TIMEFRAMES[datos['smart_timeframe']]['label']}\n"
+        f"🔬 Muestra: {report['velas']} velas · {report['giros']} giros · calidad {report['calidad']}\n"
+        f"📐 Promedio: {calibration['periodos_promedio']} periodos\n"
+        f"📉 Debilitamiento: {calibration['perdida_promedio_pct']}%\n"
+        f"🧭 Pérdida fuerte: {calibration['perdida_fuerza_pct']}%\n"
+        f"🛡 Margen de seguridad: {calibration['margen_precio_pct']}%\n"
+        f"⚡ Actividad extraordinaria: {calibration['actividad_ratio']}×\n"
+        f"🔗 Confirmaciones: {calibration['confirmaciones']}\n"
+        f"⏳ Persistencia mínima: {calibration['persistencia']} lecturas\n"
+        "🏦 Fuente: Coinbase Exchange\n\n"
+        "La estrategia espera el precio objetivo y después sigue la oportunidad sin apagar las demás protecciones.",
+        [[{"texto": "🧠 Ver alertas inteligentes", "data": "smart_list"}]],
+    )
+    guardar_estado(chat_id, "")
+    conversaciones.pop(chat_id, None)
+    return ""
+
+
+def mostrar_lista_smart(chat_id, nombre_usuario, message_id=None):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    alertas = crypto_smart.listar_alertas(chat_id)
+    datos = conversaciones[chat_id]["datos"]
+    datos["smart_message_id"] = message_id or datos.get("smart_message_id")
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_LISTA
+    conversaciones[chat_id]["wait_callback"] = True
+    rows = []
+    icons = {"esperando": "⏳", "vigilando": "🟢", "pausada": "⏸"}
+    for alert in alertas[:20]:
+        rows.append([{
+            "texto": f"{icons.get(alert['estado'], '🧠')} {crypto_alerts.nombre_book(alert['book'])} · {alert['direccion']}",
+            "data": f"smart_detail:{alert['id']}",
+        }])
+    rows.append([{"texto": "➕ Nueva inteligente", "data": "smart_start"}])
+    rows.append([{"texto": "⬅️ Criptoalertas", "data": "gestor_criptoalertas"}])
+    rows.append([{"texto": "❌ Cerrar", "data": "cancelar"}])
+    _mostrar_smart_grid(
+        chat_id,
+        f"🧠 Alertas inteligentes: {len(alertas)}\n\n⏳ esperando objetivo · 🟢 siguiendo oportunidad · ⏸ pausada",
+        rows,
+        message_id,
+    )
+    return ""
+
+
+def mostrar_detalle_smart(chat_id, alert_id, message_id=None):
+    alert = crypto_smart.obtener_alerta(alert_id, chat_id)
+    if not alert:
+        return "No encontré esa alerta inteligente."
+    inicializar_conversaciones(chat_id)
+    conversaciones[chat_id]["estado"] = ESTADO_SMART_DETALLE
+    conversaciones[chat_id]["wait_callback"] = True
+    report = alert.get("reporte_calibracion") or {}
+    rows = []
+    if alert["estado"] == "pausada":
+        rows.append([{"texto": "▶️ Reanudar", "data": f"smart_resume:{alert['id']}"}])
+    else:
+        rows.append([{"texto": "⏸ Pausar", "data": f"smart_pause:{alert['id']}"}])
+    rows.extend([
+        [{"texto": "🗑 Eliminar", "data": f"smart_delete:{alert['id']}"}],
+        [{"texto": "⬅️ Volver", "data": "smart_list"}],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ])
+    _mostrar_smart_grid(
+        chat_id,
+        f"🧠 Alerta inteligente #{alert['id']}\n\n"
+        f"Mercado: {crypto_alerts.nombre_book(alert['book'])}\n"
+        f"Dirección: {alert['direccion']}\n"
+        f"Objetivo: {crypto_alerts.formatear_precio(alert['precio_objetivo'])}\n"
+        f"Temporalidad: {crypto_smart.PRIMARY_TIMEFRAMES[alert['temporalidad']]['label']}\n"
+        f"Perfil: {crypto_smart.PROFILE_LABELS.get(alert['perfil'], alert['perfil'])}\n"
+        f"Debilitamiento: {alert['perdida_promedio_pct']}%\n"
+        f"Pérdida fuerte: {alert['perdida_fuerza_pct']}%\n"
+        f"Margen: {alert['margen_precio_pct']}%\n"
+        f"Confirmaciones: {alert['confirmaciones_requeridas']}\n"
+        f"Persistencia: {alert.get('persistencia_requerida', 2)} lecturas\n"
+        f"Muestra histórica: {report.get('velas', '—')} velas / {report.get('giros', '—')} giros\n"
+        f"Estado: {alert['estado']}\n"
+        f"Último precio: {crypto_alerts.formatear_precio(alert.get('ultimo_precio')) if alert.get('ultimo_precio') else 'pendiente'}\n"
+        "Fuente: Coinbase Exchange",
+        rows,
+        message_id,
+    )
+    return ""
 
 
 def _mostrar_fuerza_grid(chat_id, mensaje, filas, message_id=None):
@@ -1373,6 +1653,9 @@ def _mostrar_lista_criptoalertas(chat_id, pagina=0):
     filas.append([{
         "texto": "➕ Nueva criptoalerta", "data": "crypto_new"
     }])
+    filas.append([{
+        "texto": "🧠 Alertas inteligentes", "data": "smart_list"
+    }])
     filas.append([{"texto": "❌ Cerrar", "data": "cancelar"}])
     mensaje = (
         "💎 Criptoalertas Premium\n\n"
@@ -2108,12 +2391,20 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_FUERZA_CAMBIO_MIN,
             ESTADO_FUERZA_CAMBIO_MAX,
             ESTADO_FUERZA_CONSTANTE,
+            ESTADO_SMART_BOOK,
+            ESTADO_SMART_DIRECCION,
+            ESTADO_SMART_OBJETIVO,
+            ESTADO_SMART_TIMEFRAME,
+            ESTADO_SMART_PERFIL,
+            ESTADO_SMART_LISTA,
+            ESTADO_SMART_DETALLE,
         ]:
             message_id = (
                 id_callback
                 or conversaciones[chat_id]["datos"].get("gestor_message_id")
                 or conversaciones[chat_id]["datos"].get("crypto_message_id")
                 or conversaciones[chat_id]["datos"].get("strength_message_id")
+                or conversaciones[chat_id]["datos"].get("smart_message_id")
                 or conversaciones[chat_id].get("id_callback")
             )
             if message_id:
@@ -2161,6 +2452,34 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             minutos,
             datos.get("aplazar_message_id"),
         )
+
+    # — CREACIÓN DE ALERTA INTELIGENTE MULTITEMPORAL —
+    if estado_actual == ESTADO_SMART_BOOK:
+        if texto == "smart_book_custom":
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_smart_grid(chat_id, "🧠 Escribe el par exacto, por ejemplo ADA/USD.", [])
+            return ""
+        if texto.startswith("smart_book:"):
+            texto = texto.split(":", 1)[1]
+        return _seleccionar_smart_book(chat_id, texto)
+
+    if estado_actual == ESTADO_SMART_DIRECCION:
+        if not texto.startswith("smart_direction:"):
+            return "Selecciona compra o venta con los botones."
+        return _pedir_smart_objetivo(chat_id, texto.split(":", 1)[1])
+
+    if estado_actual == ESTADO_SMART_OBJETIVO:
+        return _seleccionar_smart_objetivo(chat_id, texto)
+
+    if estado_actual == ESTADO_SMART_TIMEFRAME:
+        if not texto.startswith("smart_tf:"):
+            return "Selecciona la temporalidad principal."
+        return _seleccionar_smart_timeframe(chat_id, texto.split(":", 1)[1])
+
+    if estado_actual == ESTADO_SMART_PERFIL:
+        if not texto.startswith("smart_profile:"):
+            return "Selecciona un perfil de calibración."
+        return _guardar_smart_calibrada(chat_id, texto.split(":", 1)[1])
 
     # — CREACIÓN DE ANÁLISIS DE FUERZA —
     if estado_actual == ESTADO_FUERZA_BOOK:
@@ -2290,6 +2609,12 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
 
     # — CREACIÓN DE CRIPTOALERTA —
     if estado_actual == ESTADO_CRIPTO_BOOK:
+        if texto == "smart_start":
+            return iniciar_criptointeligente(
+                chat_id,
+                conversaciones[chat_id]["datos"].get("usuario", "Usuario"),
+                conversaciones[chat_id]["datos"].get("crypto_message_id"),
+            )
         if texto == "crypto_book_custom":
             conversaciones[chat_id]["wait_callback"] = False
             _mostrar_crypto_grid(
@@ -3425,7 +3750,7 @@ def mostrar_ayuda(nombre_usuario):
     mensaje += "• /recordatorio - Crear un nuevo recordatorio\n"
     mensaje += "• /recordatorios - Buscar, consultar y editar tus recordatorios\n"
     mensaje += "• /buscar - Buscar por nombre, descripción o ID\n"
-    mensaje += "• /criptoalerta - Crear una alerta de precio premium\n"
+    mensaje += "• /criptoalerta - Crear una alerta de precio o inteligente\n"
     mensaje += "• /criptoalertas - Administrar alertas de criptomonedas\n"
     mensaje += "• /criptofuerza - Crear análisis de cambio e impulso\n"
     mensaje += "• /criptofuerzas - Administrar análisis de fuerza\n"
@@ -3642,6 +3967,70 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             "No pude detener esa criptoalerta. Puede que ya estuviera "
             "detenida o que no pertenezca a tu cuenta."
         )
+
+    # Los controles inteligentes son globales y silencian cada particularidad
+    # sin apagar las protecciones restantes.
+    if callback_data.startswith("smart_mute:"):
+        try:
+            _, alert_id, condition = callback_data.split(":", 2)
+            alert_id = int(alert_id)
+        except (TypeError, ValueError):
+            return "No pude identificar la condición inteligente."
+        if crypto_smart.silenciar_condicion(alert_id, chat_id, condition):
+            if id_callback:
+                editar_mensaje_con_grid(
+                    chat_id, id_callback,
+                    "🔕 Particularidad silenciada\n\n"
+                    f"{crypto_smart.CONDITION_LABELS.get(condition, condition)}\n\n"
+                    "Las demás protecciones continúan activas. Esta se rearmará cuando se recupere y vuelva a entrar.",
+                    [],
+                )
+            return ""
+        return "No pude silenciar esa particularidad."
+
+    if callback_data.startswith("smart_pause:"):
+        try:
+            alert_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Alerta inteligente inválida."
+        if crypto_smart.pausar_alerta(alert_id, chat_id):
+            if id_callback:
+                editar_mensaje_con_grid(chat_id, id_callback, "⏸ Estrategia inteligente suspendida.", [])
+            return ""
+        return "No pude suspender esa estrategia."
+
+    if callback_data.startswith("smart_resume:"):
+        try:
+            alert_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Alerta inteligente inválida."
+        if crypto_smart.reanudar_alerta(alert_id, chat_id):
+            return mostrar_detalle_smart(chat_id, alert_id, id_callback)
+        return "No pude reanudar esa estrategia."
+
+    if callback_data.startswith("smart_delete:"):
+        try:
+            alert_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Alerta inteligente inválida."
+        if crypto_smart.eliminar_alerta(alert_id, chat_id):
+            if id_callback:
+                editar_mensaje_con_grid(chat_id, id_callback, "🗑 Alerta inteligente eliminada.", [])
+            return ""
+        return "No pude eliminar esa alerta inteligente."
+
+    if callback_data.startswith("smart_detail:"):
+        try:
+            alert_id = int(callback_data.split(":", 1)[1])
+        except ValueError:
+            return "Alerta inteligente inválida."
+        return mostrar_detalle_smart(chat_id, alert_id, id_callback)
+
+    if callback_data == "smart_list":
+        return mostrar_lista_smart(chat_id, nombre_usuario, id_callback)
+
+    if callback_data == "smart_start":
+        return iniciar_criptointeligente(chat_id, nombre_usuario, id_callback)
 
     if callback_data.startswith("strength_stop:"):
         try:

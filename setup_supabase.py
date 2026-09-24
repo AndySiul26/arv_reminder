@@ -390,6 +390,48 @@ def crear_tablas_criptoalertas(supabase: Client):
         CREATE INDEX IF NOT EXISTS idx_cripto_fuerza_estado_mercado
             ON cripto_fuerza_alertas (estado, book, temporalidad);
 
+        CREATE TABLE IF NOT EXISTS cripto_alertas_inteligentes (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            direccion TEXT NOT NULL CHECK (direccion IN ('compra', 'venta')),
+            precio_objetivo NUMERIC(38, 18) NOT NULL CHECK (precio_objetivo > 0),
+            temporalidad TEXT NOT NULL CHECK (temporalidad IN ('30m', '1h', '4h', '1d')),
+            perfil TEXT NOT NULL CHECK (perfil IN ('rapido', 'equilibrado', 'confirmado')),
+            periodos_promedio INTEGER NOT NULL,
+            perdida_promedio_pct NUMERIC(18, 8) NOT NULL,
+            perdida_fuerza_pct NUMERIC(18, 8) NOT NULL,
+            margen_precio_pct NUMERIC(18, 8) NOT NULL,
+            actividad_ratio NUMERIC(18, 8) NOT NULL,
+            confirmaciones_requeridas INTEGER NOT NULL DEFAULT 2,
+            persistencia_requerida INTEGER NOT NULL DEFAULT 2,
+            subtemporalidades JSONB NOT NULL DEFAULT '[]'::jsonb,
+            reporte_calibracion JSONB NOT NULL DEFAULT '{}'::jsonb,
+            estado TEXT NOT NULL DEFAULT 'esperando'
+                CHECK (estado IN ('esperando', 'vigilando', 'pausada')),
+            condiciones_activas JSONB NOT NULL DEFAULT '{}'::jsonb,
+            condiciones_silenciadas JSONB NOT NULL DEFAULT '{}'::jsonb,
+            conteos_condiciones JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ultimas_notificaciones JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ultimo_precio NUMERIC(38, 18),
+            ultima_fuerza_pct NUMERIC(18, 8),
+            fuerza_promedio_pct NUMERIC(18, 8),
+            fuerza_pico_pct NUMERIC(18, 8),
+            ultima_consulta_en TIMESTAMPTZ,
+            ultimo_mensaje_id BIGINT,
+            fuente TEXT NOT NULL DEFAULT 'coinbase_exchange',
+            creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_cripto_smart_chat
+            ON cripto_alertas_inteligentes (chat_id);
+        CREATE INDEX IF NOT EXISTS idx_cripto_smart_estado
+            ON cripto_alertas_inteligentes (estado, book, temporalidad);
+        ALTER TABLE cripto_alertas_inteligentes
+            ADD COLUMN IF NOT EXISTS persistencia_requerida INTEGER NOT NULL DEFAULT 2,
+            ADD COLUMN IF NOT EXISTS conteos_condiciones JSONB NOT NULL DEFAULT '{}'::jsonb;
+
         NOTIFY pgrst, 'reload schema';
         """
         supabase.rpc("exec_sql", {"sql": sql}).execute()
@@ -436,6 +478,7 @@ def asegurar_seguridad_supabase(supabase: Client):
         "cripto_premium_users",
         "cripto_alertas",
         "cripto_fuerza_alertas",
+        "cripto_alertas_inteligentes",
     ]
     nombres = ", ".join(f"'{tabla}'" for tabla in tablas)
     sql = f"""

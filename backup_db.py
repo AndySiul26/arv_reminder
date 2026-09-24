@@ -15,7 +15,7 @@ BACKUP_PG_HOST = os.getenv("BACKUP_PG_HOST", "postgres_backup")
 BACKUP_PG_PORT = os.getenv("BACKUP_PG_PORT", "5432")
 BACKUP_PG_DB = os.getenv("BACKUP_PG_DB", "arv_backup")
 BACKUP_PG_USER = os.getenv("BACKUP_PG_USER", "arv_user")
-BACKUP_PG_PASS = os.getenv("BACKUP_PG_PASS", "arv_secure_pass")
+BACKUP_PG_PASS = os.getenv("BACKUP_PG_PASS")
 
 # Tablas a respaldar (en orden de prioridad)
 TABLAS_A_RESPALDAR = [
@@ -28,11 +28,15 @@ TABLAS_A_RESPALDAR = [
     "cripto_premium_users",
     "cripto_alertas",
     "cripto_fuerza_alertas",
+    "cripto_alertas_inteligentes",
 ]
 
 
 def _get_pg_connection():
     """Crea conexión al Postgres de backup."""
+    if not BACKUP_PG_PASS:
+        logger.error("BACKUP_PG_PASS no está configurada. Backup deshabilitado.")
+        return None
     try:
         import psycopg2
         return psycopg2.connect(
@@ -88,6 +92,43 @@ def _asegurar_esquema_cripto(conn):
         ALTER TABLE cripto_fuerza_alertas
             ADD COLUMN IF NOT EXISTS cambio_min_pct NUMERIC(18, 8),
             ADD COLUMN IF NOT EXISTS cambio_max_pct NUMERIC(18, 8);
+
+        CREATE TABLE IF NOT EXISTS cripto_alertas_inteligentes (
+            id BIGINT PRIMARY KEY,
+            chat_id TEXT NOT NULL,
+            usuario TEXT,
+            book TEXT NOT NULL,
+            direccion TEXT NOT NULL,
+            precio_objetivo NUMERIC(38, 18) NOT NULL,
+            temporalidad TEXT NOT NULL,
+            perfil TEXT NOT NULL,
+            periodos_promedio INTEGER NOT NULL,
+            perdida_promedio_pct NUMERIC(18, 8) NOT NULL,
+            perdida_fuerza_pct NUMERIC(18, 8) NOT NULL,
+            margen_precio_pct NUMERIC(18, 8) NOT NULL,
+            actividad_ratio NUMERIC(18, 8) NOT NULL,
+            confirmaciones_requeridas INTEGER DEFAULT 2,
+            persistencia_requerida INTEGER DEFAULT 2,
+            subtemporalidades JSONB DEFAULT '[]'::jsonb,
+            reporte_calibracion JSONB DEFAULT '{}'::jsonb,
+            estado TEXT DEFAULT 'esperando',
+            condiciones_activas JSONB DEFAULT '{}'::jsonb,
+            condiciones_silenciadas JSONB DEFAULT '{}'::jsonb,
+            conteos_condiciones JSONB DEFAULT '{}'::jsonb,
+            ultimas_notificaciones JSONB DEFAULT '{}'::jsonb,
+            ultimo_precio NUMERIC(38, 18),
+            ultima_fuerza_pct NUMERIC(18, 8),
+            fuerza_promedio_pct NUMERIC(18, 8),
+            fuerza_pico_pct NUMERIC(18, 8),
+            ultima_consulta_en TIMESTAMPTZ,
+            ultimo_mensaje_id BIGINT,
+            fuente TEXT DEFAULT 'coinbase_exchange',
+            creado_en TIMESTAMPTZ DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ DEFAULT NOW()
+        );
+        ALTER TABLE cripto_alertas_inteligentes
+            ADD COLUMN IF NOT EXISTS persistencia_requerida INTEGER DEFAULT 2,
+            ADD COLUMN IF NOT EXISTS conteos_condiciones JSONB DEFAULT '{}'::jsonb;
 
         CREATE TABLE IF NOT EXISTS cripto_premium_users (
             chat_id TEXT PRIMARY KEY,

@@ -21,13 +21,12 @@ def inicializar_supabase():
         print(f"Error al inicializar Supabase: {e}")
         return False
 
-def insertar_actualizaciones_desde_archivo():
+def insertar_actualizaciones_desde_archivo(archivo="Actualizaciones.txt"):
     if not inicializar_supabase():
         return
 
-    archivo = "Actualizaciones.txt"
     if not os.path.exists(archivo):
-        print("Archivo 'Actualizaciones.txt' no encontrado.")
+        print(f"Archivo de actualizaciones no encontrado: {archivo}")
         return
 
     with open(archivo, "r", encoding="utf-8") as f:
@@ -49,8 +48,21 @@ def insertar_actualizaciones_desde_archivo():
         })
 
     if actualizaciones:
-        supabase.table("actualizaciones_info").insert(actualizaciones).execute()
-        print(f"Se insertaron {len(actualizaciones)} actualizaciones correctamente.")
+        existentes = supabase.table("actualizaciones_info").select(
+            "titulo,descripcion"
+        ).execute().data or []
+        claves_existentes = {
+            (item.get("titulo", "").strip(), item.get("descripcion", "").strip())
+            for item in existentes
+        }
+        nuevas = [
+            item for item in actualizaciones
+            if (item["titulo"].strip(), item["descripcion"].strip())
+            not in claves_existentes
+        ]
+        if nuevas:
+            supabase.table("actualizaciones_info").insert(nuevas).execute()
+        print(f"Se insertaron {len(nuevas)} actualizaciones nuevas correctamente.")
     else:
         print("No se encontraron actualizaciones válidas en el archivo.")
 
@@ -59,7 +71,7 @@ def registrar_chats_si_no_existen():
         return
 
     try:
-        response = supabase.table("recordatorios").select("chat_id").execute()
+        response = supabase.table("chats_info").select("chat_id").execute()
         chat_ids_recordatorios = set([r["chat_id"] for r in response.data])
 
         response_existentes = supabase.table("chats_avisados_actualizaciones").select("chat_id").execute()
@@ -104,9 +116,7 @@ def obtener_chats_para_actualizacion():
 
         # Unir ambos resultados
         chats_para_actualizar = chats_viejos + chats_null
-        print(f"Chats pendientes de recibir la última actualización (ID {id_ultima}):")
-        for cid in chats_para_actualizar:
-            print(f"- {cid}")
+        print(f"Chats pendientes de recibir la última actualización (ID {id_ultima}): {len(chats_para_actualizar)}")
         
         return [chat["chat_id"] for chat in chats_para_actualizar]
 

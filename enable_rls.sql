@@ -9,7 +9,8 @@ BEGIN
         'recordatorios', 'chats_info', 'actualizaciones_info',
         'chats_avisados_actualizaciones', 'modo_tester', 'chats_id_estados',
         'reportes', 'cripto_premium_users', 'cripto_alertas',
-        'cripto_fuerza_alertas'
+        'cripto_fuerza_alertas',
+        'cripto_alertas_inteligentes'
     ]
     LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tabla);

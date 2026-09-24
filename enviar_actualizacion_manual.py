@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from gestionar_actualizaciones import insertar_actualizaciones_desde_archivo, registrar_chats_si_no_existen, obtener_chats_para_actualizacion, actualizar_id_ultima_actualizacion_para_chat, obtener_ultima_actualizacion
 from services import enviar_telegram
 import json
+import sys
 
 # Cargar variables de entorno
 load_dotenv()
@@ -14,7 +15,8 @@ if __name__ == "__main__":
 
     # 1. Insertar la actualización desde el archivo Actualizaciones.txt
     print("1️⃣  Insertando actualización en base de datos...")
-    insertar_actualizaciones_desde_archivo()
+    archivo_actualizacion = sys.argv[1] if len(sys.argv) > 1 else "Actualizaciones.txt"
+    insertar_actualizaciones_desde_archivo(archivo_actualizacion)
 
     # 2. Registrar chats nuevos
     print("2️⃣  Sincronizando chats...")
@@ -39,9 +41,14 @@ if __name__ == "__main__":
              # 5. Enviar mensajes (Simulando lo que hace reminders.py pero manual)
              for chat_id in chats:
                 try:
-                    enviar_telegram(chat_id, tipo="texto", mensaje=msg, formato="Markdown")
-                    actualizar_id_ultima_actualizacion_para_chat(chat_id, ultima["id"])
-                    print(f"   -> Enviado a {chat_id}")
+                    response = enviar_telegram(
+                        chat_id, tipo="texto", mensaje=msg, formato="Markdown"
+                    )
+                    if response is not None and getattr(response, "status_code", 0) == 200:
+                        actualizar_id_ultima_actualizacion_para_chat(chat_id, ultima["id"])
+                        print("   -> Enviado correctamente")
+                    else:
+                        print("   ❌ Telegram no confirmó la entrega; queda pendiente")
                 except Exception as e:
                     print(f"   ❌ Error enviando a {chat_id}: {e}")
 
