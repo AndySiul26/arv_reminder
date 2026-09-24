@@ -420,6 +420,10 @@ El aviso constante se repite aproximadamente cada minuto mientras continúe la
 condición. El botón Detener silencia la insistencia actual; cuando el indicador
 sale del umbral se calma y se rearma automáticamente. `/criptofuerzas` permite
 consultar, recalibrar la referencia con el mercado actual o eliminar el análisis.
+Los avisos de fuerza también incluyen `Detener y recalibrar ahora`: silencia el
+evento actual, captura el cambio vigente como nueva referencia y comienza a
+medir la siguiente variación desde ese momento. El cambio simple no necesita
+recalibración porque siempre compara contra límites absolutos.
 
 Los mensajes muestran proveedor, par, temporalidad, precio actual, precio al
 inicio de la ventana, cambio actual, referencia y variación de fuerza. No se
@@ -601,10 +605,10 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | --- | --- | --- |
 | `TELEGRAM_TOKEN` | Sí | Token del bot; envío de mensajes y registro del webhook en producción. |
 | `SUPABASE_URL` | Sí | URL del proyecto de Supabase. |
-| `SUPABASE_KEY` | Sí | Clave usada por la aplicación normal. |
-| `SUPABASE_KEY_SERVICE_ROLE` | Sí para instalación/admin | Creación de tablas y scripts administrativos. |
+| `SUPABASE_KEY_SERVICE_ROLE` | Sí | Única clave de acceso a tablas; permanece exclusivamente en el VPS. |
 | `TELEGRAM_TEST_USER_ID` | Recomendable | Chat autorizado en modo tester y receptor de reportes. |
 | `WEBHOOK_URL` | Sí en producción | URL HTTPS completa terminada en `/webhook`. |
+| `BACKUP_PG_PASS` | Sí | Contraseña aleatoria del PostgreSQL local; no tiene valor predeterminado. |
 | `LOCAL_MODE` | Sí | `false` en producción; habilita el servidor local si es `true`. |
 | `USE_NGROK_LOCAL` | Solo local | Registra un túnel ngrok al ejecutar localmente. |
 | `TZ` | Recomendable | Zona horaria del contenedor. |
@@ -799,16 +803,16 @@ heredada `TELEGRAM_BOT_TOKEN`.
 - `.env` está ignorado por Git y excluido de la imagen durante el build.
 - El token de Telegram y las claves de Supabase deben existir únicamente en
   variables de entorno.
-- `SUPABASE_KEY_SERVICE_ROLE` concede privilegios elevados y solo debe utilizarse
-  para administración y creación de tablas.
-- `enable_rls.sql` habilita RLS, pero sus políticas conceden acceso total al rol
-  `anon`. Por lo tanto, no existe aislamiento real por fila en la configuración
-  actual.
-- El ID del chat que recibe alertas de base de datos está escrito directamente en
-  `supabase_db.py`; debe convertirse en variable de entorno.
-- El valor predeterminado de `BACKUP_PG_PASS` no es seguro para producción.
-- Los JSON de actualizaciones entrantes se agregan a `debug_mensaje.json` y
-  `debug_callback.json`. Pueden contener nombres, IDs y mensajes de usuarios.
+- `SUPABASE_KEY_SERVICE_ROLE` concede privilegios elevados, se usa únicamente
+  desde el backend y debe permanecer en el `.env` protegido del VPS.
+- Todas las tablas tienen RLS habilitado. Los roles `anon` y `authenticated` no
+  tienen privilegios sobre las tablas, secuencias ni RPC administrativas.
+- `exec_sql` y `reclamar_envio_recordatorio` sólo pueden ejecutarse con
+  `service_role`.
+- El chat administrativo se obtiene de `TELEGRAM_TEST_USER_ID`; no hay un ID
+  personal incrustado en el repositorio.
+- Las actualizaciones completas de Telegram no se escriben en archivos de debug.
+- `BACKUP_PG_PASS` es obligatorio y debe ser largo y aleatorio.
 - El webhook no valida `X-Telegram-Bot-Api-Secret-Token`.
 - El certificado es autofirmado y se vuelve a generar al reconstruir una imagen
   que no conserve esos archivos.
@@ -824,7 +828,8 @@ Estas observaciones continúan vigentes después de esta actualización:
 3. `LOCAL_MODE` se lee antes de `load_dotenv()`.
 4. PostgreSQL es solo respaldo; no existe failover automático.
 5. Si Supabase falla al arrancar, el administrador no se recupera sin reinicio.
-6. Las políticas RLS permiten acceso completo al rol `anon`.
+6. `service_role` ignora RLS por diseño; proteger el `.env` y el acceso root del
+   VPS es parte de la frontera de seguridad.
 7. El estado global en memoria limita el escalado de conversaciones a varias
    instancias; los envíos de recordatorios sí cuentan con reserva atómica.
 8. Los callbacks y el diccionario global no tienen bloqueo explícito entre los

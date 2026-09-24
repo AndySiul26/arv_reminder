@@ -120,12 +120,12 @@ def crear_tabla_recordatorios(supabase: Client) -> bool:
         ) RETURNS BOOLEAN
         LANGUAGE plpgsql
         SECURITY DEFINER
-        SET search_path = public
+        SET search_path = ''
         AS $$
         DECLARE
             v_id BIGINT;
         BEGIN
-            UPDATE recordatorios
+            UPDATE public.recordatorios
             SET ultimo_envio_en = NOW()
             WHERE id = p_id
               AND chat_id = p_chat_id
@@ -145,9 +145,12 @@ def crear_tabla_recordatorios(supabase: Client) -> bool:
         END;
         $$;
 
+        REVOKE EXECUTE ON FUNCTION reclamar_envio_recordatorio(
+            BIGINT, TEXT, INTEGER
+        ) FROM PUBLIC, anon, authenticated;
         GRANT EXECUTE ON FUNCTION reclamar_envio_recordatorio(
             BIGINT, TEXT, INTEGER
-        ) TO anon, authenticated, service_role;
+        ) TO service_role;
         """
         response = supabase.rpc("exec_sql", {"sql": sql}).execute()
         print(response)
@@ -420,6 +423,78 @@ def crear_tablas_criptoalertas(supabase: Client):
         return False
 
 
+def asegurar_seguridad_supabase(supabase: Client):
+    """Cierra el acceso público; el backend usa exclusivamente service_role."""
+    tablas = [
+        "recordatorios",
+        "chats_info",
+        "actualizaciones_info",
+        "chats_avisados_actualizaciones",
+        "modo_tester",
+        "chats_id_estados",
+        "reportes",
+        "cripto_premium_users",
+        "cripto_alertas",
+        "cripto_fuerza_alertas",
+    ]
+    nombres = ", ".join(f"'{tabla}'" for tabla in tablas)
+    sql = f"""
+    DO $security$
+    DECLARE
+        tabla TEXT;
+    BEGIN
+        FOREACH tabla IN ARRAY ARRAY[{nombres}]
+        LOOP
+            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tabla);
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON TABLE public.%I FROM anon, authenticated',
+                tabla
+            );
+            EXECUTE format(
+                'GRANT ALL PRIVILEGES ON TABLE public.%I TO service_role',
+                tabla
+            );
+            EXECUTE format(
+                'DROP POLICY IF EXISTS %I ON public.%I',
+                'Allow anon access',
+                tabla
+            );
+        END LOOP;
+    END
+    $security$;
+
+    REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public
+        FROM anon, authenticated;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+    REVOKE EXECUTE ON FUNCTION public.exec_sql(TEXT)
+        FROM PUBLIC, anon, authenticated;
+    GRANT EXECUTE ON FUNCTION public.exec_sql(TEXT) TO service_role;
+    REVOKE EXECUTE ON FUNCTION public.reclamar_envio_recordatorio(
+        BIGINT, TEXT, INTEGER
+    ) FROM PUBLIC, anon, authenticated;
+    GRANT EXECUTE ON FUNCTION public.reclamar_envio_recordatorio(
+        BIGINT, TEXT, INTEGER
+    ) TO service_role;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        REVOKE ALL ON TABLES FROM anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
+
+    NOTIFY pgrst, 'reload schema';
+    """
+    try:
+        supabase.rpc("exec_sql", {"sql": sql}).execute()
+        print("✅ RLS y privilegios de Supabase endurecidos correctamente.")
+        return True
+    except Exception as exc:
+        print(f"❌ No se pudo endurecer la seguridad de Supabase: {exc}")
+        return False
+
+
 if __name__ == "__main__":
     print("Configurando base de datos en Supabase...")
     try:
@@ -437,6 +512,7 @@ if __name__ == "__main__":
             crear_tabla_chats_id_estados(cliente)
             crear_tabla_reportes(cliente)
             crear_tablas_criptoalertas(cliente)
+            asegurar_seguridad_supabase(cliente)
             print("✅ Configuración completada con éxito")
         else:
              print("⚠️ Salto de configuración por cliente nulo.")

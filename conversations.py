@@ -3661,6 +3661,29 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
             return ""
         return "No pude detener ese aviso de fuerza."
 
+    if callback_data.startswith("strength_stop_rebase:"):
+        try:
+            alerta_id = int(callback_data.split(":", 1)[1])
+            result = crypto_strength.detener_y_recalibrar(alerta_id, chat_id)
+        except Exception as exc:
+            print(
+                f"[ERROR] No se pudo detener y recalibrar {alerta_id}: {exc}"
+            )
+            return f"No pude recalibrar este análisis: {exc}"
+        if not result:
+            return "No pude encontrar o recalibrar ese análisis de fuerza."
+        alerta, analisis = result
+        if id_callback:
+            editar_mensaje_con_grid(
+                chat_id,
+                id_callback,
+                "🎯 Aviso detenido y referencia recalibrada\n\n"
+                f"Nueva referencia: {crypto_strength._fmt(analisis['cambio_pct'])}\n"
+                "El próximo cambio de fuerza se medirá desde este momento.",
+                [],
+            )
+        return ""
+
     if callback_data.startswith("strength_detail:"):
         try:
             alerta_id = int(callback_data.split(":", 1)[1])

@@ -1,26 +1,51 @@
--- ALERTA: Ejecuta este script en el Editor SQL de tu Dashboard de Supabase.
--- Esto habilitará RLS pero permitirá que el bot siga funcionando con su anon_key.
+-- Seguridad para una aplicación exclusivamente backend.
+-- El bot del VPS usa service_role; anon/authenticated no deben acceder.
 
--- 1. Habilitar RLS en tablas principales
-ALTER TABLE recordatorios ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chats_info ENABLE ROW LEVEL SECURITY;
-ALTER TABLE actualizaciones_info ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chats_avisados_actualizaciones ENABLE ROW LEVEL SECURITY;
-ALTER TABLE modo_tester ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chats_id_estados ENABLE ROW LEVEL SECURITY;
-ALTER TABLE reportes ENABLE ROW LEVEL SECURITY;
+DO $security$
+DECLARE
+    tabla TEXT;
+BEGIN
+    FOREACH tabla IN ARRAY ARRAY[
+        'recordatorios', 'chats_info', 'actualizaciones_info',
+        'chats_avisados_actualizaciones', 'modo_tester', 'chats_id_estados',
+        'reportes', 'cripto_premium_users', 'cripto_alertas',
+        'cripto_fuerza_alertas'
+    ]
+    LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tabla);
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON TABLE public.%I FROM anon, authenticated',
+            tabla
+        );
+        EXECUTE format(
+            'GRANT ALL PRIVILEGES ON TABLE public.%I TO service_role', tabla
+        );
+        EXECUTE format(
+            'DROP POLICY IF EXISTS %I ON public.%I', 'Allow anon access', tabla
+        );
+    END LOOP;
+END
+$security$;
 
--- 2. Crear políticas de ACCESO TOTAL para el rol 'anon'
--- Esto permite que el bot (usando la clave pública) siga leyendo/escribiendo sin restricciones.
--- La seguridad radica en que solo tú tienes la clave y el control del bot.
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public
+    FROM anon, authenticated;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
-CREATE POLICY "Allow anon access" ON recordatorios FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON chats_info FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON actualizaciones_info FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON chats_avisados_actualizaciones FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON modo_tester FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON chats_id_estados FOR ALL TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon access" ON reportes FOR ALL TO anon USING (true) WITH CHECK (true);
+REVOKE EXECUTE ON FUNCTION public.exec_sql(TEXT)
+    FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.exec_sql(TEXT) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.reclamar_envio_recordatorio(
+    BIGINT, TEXT, INTEGER
+) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reclamar_envio_recordatorio(
+    BIGINT, TEXT, INTEGER
+) TO service_role;
 
--- Nota: El rol 'service_role' (usado por tus scripts admin) ignora RLS automáticamente,
--- así que no necesita políticas.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
+
+NOTIFY pgrst, 'reload schema';

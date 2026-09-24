@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import json, os
+import os
 from flask import Blueprint, request
 import threading
 from collections import defaultdict
@@ -72,10 +72,6 @@ def manejar_mensaje(data):
     if not rev_mod_tester_and_continue(chat_id=chat_id):
         return "ok", 200
 
-    # Debug
-    with open("debug_mensaje.json", "a", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False); f.write("\n")
-
     # Comandos predefinidos
     if text.startswith("/start"):
         enviar_telegram(
@@ -117,10 +113,6 @@ def manejar_callback(data):
     nombre = cb["from"].get("first_name", "Usuario")
     tipo_chat = cb["message"]["chat"]["type"]
     message_id = cb["message"]["message_id"]
-
-    # Debug
-    with open("debug_callback.json", "a", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False); f.write("\n")
 
     try:
         responder_callback_query(cb["id"])

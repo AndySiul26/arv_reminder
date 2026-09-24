@@ -356,6 +356,14 @@ def recalibrar_alerta(alerta_id, chat_id):
     return (rows[0], analisis) if rows else None
 
 
+def detener_y_recalibrar(alerta_id, chat_id):
+    """Silencia el evento actual y usa el cambio presente como nueva base."""
+    alerta = obtener_alerta(alerta_id, chat_id)
+    if not alerta or alerta.get("modo") not in ("fuerza", "ambos"):
+        return None
+    return recalibrar_alerta(alerta_id, chat_id)
+
+
 def _fmt(value, places=2):
     value = Decimal(str(value))
     return f"{value:+.{places}f}%"
@@ -523,6 +531,11 @@ class MonitorFuerzaCripto:
                             "texto": "🛑 Detener este aviso",
                             "data": f"strength_stop:{alerta['id']}",
                         }]]
+                        if alerta.get("modo") in ("fuerza", "ambos"):
+                            rows.append([{
+                                "texto": "🎯 Detener y recalibrar ahora",
+                                "data": f"strength_stop_rebase:{alerta['id']}",
+                            }])
                     response = enviar_mensaje_con_grid(
                         alerta["chat_id"],
                         mensaje_alerta(alerta, analysis, hits, fuerza, repetition),

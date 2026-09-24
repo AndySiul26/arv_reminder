@@ -37,15 +37,17 @@ def con_reintentos(max_reintentos=3, espera_base=1):
 # to prevent the app from hanging indefinitely during outages.
 socket.setdefaulttimeout(5)
 
-ADMIN_CHAT_ID = "6934945886"
+load_dotenv()
+
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_TEST_USER_ID", "")
 _last_admin_notification_time = 0
 NOTIFICATION_COOLDOWN = 300  # 5 minutes
 
-load_dotenv()
-
 # Cargar configuración de Supabase desde variables de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY_SERVICE_ROLE") or os.getenv("SUPABASE_KEY")
+)
 
 # Inicializar cliente de Supabase
 supabase: Client = None

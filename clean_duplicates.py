@@ -6,7 +6,9 @@ from supabase import create_client
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY_SERVICE_ROLE") or os.getenv("SUPABASE_KEY")
+)
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("Error: No se encontraron las credenciales de Supabase en las variables de entorno")

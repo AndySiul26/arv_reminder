@@ -674,6 +674,24 @@ class CryptoConversationTests(unittest.TestCase):
         stop_alert.assert_called_once_with(9, "42")
         edit_grid.assert_called_once()
 
+    @patch("conversations.editar_mensaje_con_grid")
+    @patch("conversations.crypto_strength.detener_y_recalibrar")
+    @patch("conversations.supabase_db.upsert_chat_info")
+    def test_strength_stop_and_rebase_is_global(
+        self, upsert, stop_and_rebase, edit_grid
+    ):
+        stop_and_rebase.return_value = (
+            {"id": 15, "modo": "fuerza"},
+            {"cambio_pct": Decimal("1.75")},
+        )
+        response = conversations.procesar_callback(
+            "42", "strength_stop_rebase:15", "Andy", "private", 902
+        )
+        self.assertEqual(response, "")
+        stop_and_rebase.assert_called_once_with(15, "42")
+        edit_grid.assert_called_once()
+        self.assertIn("+1.75%", edit_grid.call_args.args[2])
+
     def test_complete_strength_alert_flow(self):
         conversations.conversaciones["42"] = {
             "estado": "",

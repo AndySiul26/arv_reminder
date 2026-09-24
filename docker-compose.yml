@@ -17,7 +17,7 @@ services:
       - BACKUP_PG_PORT=5432
       - BACKUP_PG_DB=arv_backup
       - BACKUP_PG_USER=arv_user
-      - BACKUP_PG_PASS=${BACKUP_PG_PASS:-arv_secure_pass}
+      - BACKUP_PG_PASS=${BACKUP_PG_PASS:?BACKUP_PG_PASS is required}
     depends_on:
       postgres_backup:
         condition: service_healthy
@@ -29,7 +29,7 @@ services:
     environment:
       POSTGRES_DB: arv_backup
       POSTGRES_USER: arv_user
-      POSTGRES_PASSWORD: ${BACKUP_PG_PASS:-arv_secure_pass}
+      POSTGRES_PASSWORD: ${BACKUP_PG_PASS:?BACKUP_PG_PASS is required}
     volumes:
       - pg_backup_data:/var/lib/postgresql/data
       - ./init_backup_db.sql:/docker-entrypoint-initdb.d/init.sql
