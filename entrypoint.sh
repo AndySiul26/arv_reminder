@@ -24,11 +24,18 @@ if [ ! -f "$CERT_FILE" ]; then
     
     openssl req -newkey rsa:2048 -sha256 -nodes -keyout "$KEY_FILE" -x509 -days 3650 \
         -out "$CERT_FILE" -subj "/C=MX/ST=State/L=City/O=Bot/CN=$DOMAIN"
+
+    chmod 600 "$KEY_FILE"
+    chmod 644 "$CERT_FILE"
         
     echo "   Certificates generated."
 else
     echo "🔐 SSL Certificate found, skipping generation."
 fi
+
+# Reassert safe permissions even when the certificate already existed.
+chmod 600 "$KEY_FILE"
+chmod 644 "$CERT_FILE"
 
 # 3. Configure Telegram Webhook WITH Certificate
 if [ -z "$WEBHOOK_URL" ]; then

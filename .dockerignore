@@ -3,3 +3,9 @@ __pycache__
 .git
 .env
 *.pyc
+*.pem
+*.key
+debug*.json
+*.db
+*.sqlite
+backups/

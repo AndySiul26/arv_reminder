@@ -9,6 +9,8 @@ env/
 .env.local
 .env.development
 .env.production
+*.pem
+*.key
 
 # Archivo de configuración de Python
 __pycache__/
@@ -36,6 +38,7 @@ wheels/
 *.log
 logs/
 debug_*.json
+debug*.json
 debug_*.txt
 mi_diccionario.json
 
