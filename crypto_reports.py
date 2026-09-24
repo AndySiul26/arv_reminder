@@ -27,6 +27,9 @@ MESSAGE_LIMIT = 3800
 BINANCE_API_BASE_URL = os.getenv(
     "BINANCE_API_BASE_URL", "https://api.binance.com/api/v3"
 ).rstrip("/")
+BINANCE_API_FALLBACK_URL = os.getenv(
+    "BINANCE_API_FALLBACK_URL", "https://data-api.binance.vision/api/v3"
+).rstrip("/")
 BINANCE_COMPARABLE_QUOTES = tuple(
     quote.strip().upper()
     for quote in os.getenv(
@@ -231,14 +234,23 @@ def _coinbase_report(book):
 
 
 def _binance_get(path, params=None):
-    response = requests.get(
-        f"{BINANCE_API_BASE_URL}/{path.lstrip('/')}",
-        params=params,
-        headers={"User-Agent": "ARV-Reminder/4.0 market-reports"},
-        timeout=crypto_smart.TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json()
+    last_error = None
+    endpoints = dict.fromkeys((BINANCE_API_BASE_URL, BINANCE_API_FALLBACK_URL))
+    for endpoint in endpoints:
+        try:
+            response = requests.get(
+                f"{endpoint}/{path.lstrip('/')}",
+                params=params,
+                headers={"User-Agent": "ARV-Reminder/4.0 market-reports"},
+                timeout=crypto_smart.TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("No hay endpoints públicos de Binance configurados")
 
 
 def _binance_markets():

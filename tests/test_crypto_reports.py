@@ -1,7 +1,7 @@
 import os
 import unittest
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
@@ -39,6 +39,19 @@ class CryptoReportMathTests(unittest.TestCase):
 
 
 class CryptoReportProviderTests(unittest.TestCase):
+    @patch("crypto_reports.requests.get")
+    def test_binance_uses_public_data_fallback_after_regional_block(self, get):
+        blocked = Mock()
+        blocked.raise_for_status.side_effect = crypto_reports.requests.HTTPError("451")
+        fallback = Mock()
+        fallback.raise_for_status.return_value = None
+        fallback.json.return_value = {"symbols": []}
+        get.side_effect = [blocked, fallback]
+
+        self.assertEqual(crypto_reports._binance_get("exchangeInfo"), {"symbols": []})
+        self.assertEqual(get.call_count, 2)
+        self.assertIn("data-api.binance.vision", get.call_args_list[1].args[0])
+
     @patch("crypto_reports.crypto_strength.validar_producto")
     @patch("crypto_reports.crypto_alerts.obtener_ticker_bitso")
     @patch("crypto_reports.crypto_alerts.obtener_libros_bitso", return_value=["ada_usd"])

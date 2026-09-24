@@ -488,7 +488,9 @@ lo publiquen:
   de sus velas para las mismas temporalidades. Si se pidió un par de la familia
   USD, consulta los pares activos configurados (`USD`, `USDT`, `USDC`, `TUSD`) y
   muestra el nombre real de cada mercado. Solo incorpora símbolos que Binance
-  marque actualmente como negociables.
+  marque actualmente como negociables. Si el endpoint principal tiene una
+  restricción regional, usa automáticamente el endpoint público de datos de
+  Binance; ambos entregan información pública del mismo exchange.
 
 Un `*` indica que el histórico de trades de Bitso no cubrió toda la ventana; el
 mensaje muestra muestras y cobertura, en lugar de presentar el valor parcial
@@ -713,6 +715,7 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `CRYPTO_REPORT_MAX_MARKETS` | No | Mercados guardados por usuario; predeterminado: 20, máximo: 30. |
 | `CRYPTO_REPORT_BITSO_PAGES` | No | Páginas de 100 trades usadas por mercado; predeterminado: 8, máximo: 20. |
 | `BINANCE_API_BASE_URL` | No | API pública spot; por defecto `https://api.binance.com/api/v3`. |
+| `BINANCE_API_FALLBACK_URL` | No | Respaldo público de datos para regiones restringidas; por defecto `https://data-api.binance.vision/api/v3`. |
 | `BINANCE_COMPARABLE_QUOTES` | No | Cotizaciones comparables, claramente etiquetadas; por defecto `USD,USDT,USDC,TUSD`. |
 
 Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
