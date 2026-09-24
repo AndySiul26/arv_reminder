@@ -85,7 +85,8 @@ def manejar_mensaje(data):
                 {"texto": "🧠 Alerta inteligente", "data": "smart_start"},
                 {"texto": "📈 Gestionar Criptoalertas", "data": "gestor_criptoalertas"},
                 {"texto": "📊 Nuevo análisis de fuerza", "data": "nueva_criptofuerza"},
-                {"texto": "🧭 Gestionar fuerza", "data": "gestor_criptofuerzas"}
+                {"texto": "🧭 Gestionar fuerza", "data": "gestor_criptofuerzas"},
+                {"texto": "📊 Mis mercados", "data": "market_menu"}
             ]
         )
     elif text.startswith("/ayuda"):

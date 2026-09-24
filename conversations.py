@@ -8,6 +8,7 @@ import supabase_db
 import crypto_alerts
 import crypto_strength
 import crypto_smart
+import crypto_reports
 from supabase_db import actualizar_campos_recordatorio  # IMPORT
 # db_manager ELIMINADO — Supabase es la única fuente de verdad
 import utilidades, os
@@ -70,6 +71,9 @@ ESTADO_SMART_TIMEFRAME       = "smart_timeframe"
 ESTADO_SMART_PERFIL          = "smart_perfil"
 ESTADO_SMART_LISTA           = "smart_lista"
 ESTADO_SMART_DETALLE         = "smart_detalle"
+# — ESTADOS INFORME DE MERCADOS —
+ESTADO_MERCADOS_MENU         = "mercados_menu"
+ESTADO_MERCADOS_ADD          = "mercados_add"
 CRIPTO_POR_PAGINA = 5
 CRYPTO_LIVE_UPDATE_SECONDS = max(
     10, int(os.getenv("CRYPTO_LIVE_UPDATE_SECONDS", "10"))
@@ -871,6 +875,88 @@ def mostrar_detalle_smart(chat_id, alert_id, message_id=None):
         rows,
         message_id,
     )
+    return ""
+
+
+def mostrar_menu_mercados(chat_id, nombre_usuario, message_id=None):
+    if not crypto_alerts.es_usuario_premium(chat_id):
+        return _mensaje_premium_cripto(chat_id)
+    inicializar_conversaciones(chat_id, nombre_usuario)
+    datos = conversaciones[chat_id]["datos"]
+    if message_id:
+        datos["crypto_message_id"] = message_id
+        conversaciones[chat_id]["id_callback"] = message_id
+    markets = crypto_reports.listar_mercados(chat_id)
+    conversaciones[chat_id]["estado"] = ESTADO_MERCADOS_MENU
+    conversaciones[chat_id]["wait_callback"] = True
+    rows = []
+    for book in markets:
+        rows.append([{
+            "texto": f"🗑 {crypto_alerts.nombre_book(book)}",
+            "data": f"market_remove:{book}",
+        }])
+    rows.extend([
+        [{"texto": "➕ Agregar mercado", "data": "market_add"}],
+        [{"texto": "📊 Generar informe ahora", "data": "market_report"}],
+        [{"texto": "❌ Cerrar", "data": "cancelar"}],
+    ])
+    listed = ", ".join(crypto_alerts.nombre_book(book) for book in markets) or "ninguno"
+    _mostrar_crypto_grid(
+        chat_id,
+        "📊 Mis mercados\n\n"
+        f"Seleccionados ({len(markets)}/{crypto_reports.MAX_MARKETS}): {listed}\n\n"
+        "Toca un mercado para quitarlo. El informe consulta por separado los exchanges que publiquen el par exacto.",
+        rows,
+        message_id,
+    )
+    return ""
+
+
+def _mostrar_agregar_mercado(chat_id):
+    conversaciones[chat_id]["estado"] = ESTADO_MERCADOS_ADD
+    conversaciones[chat_id]["wait_callback"] = True
+    _mostrar_crypto_grid(
+        chat_id,
+        "➕ Agregar mercado\n\nSelecciona uno o escribe el par exacto. No se sustituirá USD, MXN, USDT u otra moneda.",
+        [
+            [
+                {"texto": "ADA/USD", "data": "market_quick:ada_usd"},
+                {"texto": "GALA/USD", "data": "market_quick:gala_usd"},
+            ],
+            [
+                {"texto": "BTC/MXN", "data": "market_quick:btc_mxn"},
+                {"texto": "ETH/USD", "data": "market_quick:eth_usd"},
+            ],
+            [{"texto": "✍️ Escribir otro", "data": "market_custom"}],
+            [{"texto": "⬅️ Volver", "data": "market_menu"}],
+        ],
+    )
+    return ""
+
+
+def _agregar_mercado_usuario(chat_id, raw, nombre_usuario=""):
+    book, error = crypto_reports.agregar_mercado(chat_id, _normalizar_book(raw))
+    if error and not book:
+        return error
+    mostrar_menu_mercados(chat_id, nombre_usuario)
+    return error or ""
+
+
+def _lanzar_informe_mercados(chat_id, nombre_usuario, message_id=None):
+    if not crypto_reports.listar_mercados(chat_id):
+        return "Tu lista está vacía. Agrega al menos un mercado."
+    if message_id:
+        editar_mensaje_con_grid(
+            chat_id, message_id,
+            "📊 Generando informe…\n\nConsulto cada exchange y dividiré automáticamente los resultados si superan el límite de Telegram.",
+            [[{"texto": "⬅️ Volver a mercados", "data": "market_menu"}]],
+        )
+    else:
+        enviar_telegram(
+            chat_id, tipo="texto",
+            mensaje="📊 Generando informe de mercados…",
+        )
+    crypto_reports.iniciar_informe_async(chat_id)
     return ""
 
 
@@ -2363,6 +2449,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
         return iniciar_criptofuerza(chat_id, nombre_usuario)
     if texto_minusculas in ["/criptofuerzas", "criptofuerzas"]:
         return mostrar_lista_fuerza(chat_id, nombre_usuario)
+    if texto_minusculas in ["/mercados", "mercados", "/informecripto", "informecripto"]:
+        return mostrar_menu_mercados(chat_id, nombre_usuario)
     if texto.lower() in ["/reportar", "reportar"]:
         return iniciar_reporte(chat_id, nombre_usuario)
     if texto.lower() in ["/cancelar", "cancelar"]:
@@ -2398,6 +2486,8 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             ESTADO_SMART_PERFIL,
             ESTADO_SMART_LISTA,
             ESTADO_SMART_DETALLE,
+            ESTADO_MERCADOS_MENU,
+            ESTADO_MERCADOS_ADD,
         ]:
             message_id = (
                 id_callback
@@ -2451,6 +2541,22 @@ def procesar_mensaje(chat_id, texto:str, nombre_usuario, es_callback=False, tipo
             datos["aplazar_recordatorio_id"],
             minutos,
             datos.get("aplazar_message_id"),
+        )
+
+    if estado_actual == ESTADO_MERCADOS_ADD:
+        if texto == "market_custom":
+            conversaciones[chat_id]["wait_callback"] = False
+            _mostrar_crypto_grid(
+                chat_id,
+                "✍️ Escribe el par exacto, por ejemplo GALA/USD, ADA/USD o BTC/MXN.",
+                [],
+            )
+            return ""
+        if texto.startswith("market_quick:"):
+            texto = texto.split(":", 1)[1]
+        return _agregar_mercado_usuario(
+            chat_id, texto,
+            conversaciones[chat_id]["datos"].get("usuario", nombre_usuario),
         )
 
     # — CREACIÓN DE ALERTA INTELIGENTE MULTITEMPORAL —
@@ -3754,6 +3860,7 @@ def mostrar_ayuda(nombre_usuario):
     mensaje += "• /criptoalertas - Administrar alertas de criptomonedas\n"
     mensaje += "• /criptofuerza - Crear análisis de cambio e impulso\n"
     mensaje += "• /criptofuerzas - Administrar análisis de fuerza\n"
+    mensaje += "• /mercados - Lista personal e informe multiexchange\n"
     mensaje += "• /reportar - Reportar un problema o incidencia\n"
     mensaje += "• /ayuda - Mostrar este mensaje de ayuda\n\n"
     mensaje += "También puedes aplazar un aviso 5, 10, 20 minutos o elegir un tiempo personalizado.\n\n"
@@ -3987,6 +4094,39 @@ def procesar_callback(chat_id, callback_data, nombre_usuario, tipo, id_callback)
                 )
             return ""
         return "No pude silenciar esa particularidad."
+
+    if callback_data == "market_menu":
+        return mostrar_menu_mercados(chat_id, nombre_usuario, id_callback)
+
+    if callback_data == "market_add":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        return _mostrar_agregar_mercado(chat_id)
+
+    if callback_data == "market_custom":
+        inicializar_conversaciones(chat_id, nombre_usuario)
+        conversaciones[chat_id]["estado"] = ESTADO_MERCADOS_ADD
+        conversaciones[chat_id]["wait_callback"] = False
+        _mostrar_crypto_grid(
+            chat_id,
+            "✍️ Escribe el par exacto, por ejemplo GALA/USD, ADA/USD o BTC/MXN.",
+            [],
+            id_callback,
+        )
+        return ""
+
+    if callback_data.startswith("market_quick:"):
+        return _agregar_mercado_usuario(
+            chat_id, callback_data.split(":", 1)[1], nombre_usuario
+        )
+
+    if callback_data.startswith("market_remove:"):
+        book = callback_data.split(":", 1)[1]
+        if not crypto_reports.quitar_mercado(chat_id, book):
+            return "No pude quitar ese mercado o ya no estaba en tu lista."
+        return mostrar_menu_mercados(chat_id, nombre_usuario, id_callback)
+
+    if callback_data == "market_report":
+        return _lanzar_informe_mercados(chat_id, nombre_usuario, id_callback)
 
     if callback_data.startswith("smart_pause:"):
         try:

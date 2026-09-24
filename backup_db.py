@@ -29,6 +29,7 @@ TABLAS_A_RESPALDAR = [
     "cripto_alertas",
     "cripto_fuerza_alertas",
     "cripto_alertas_inteligentes",
+    "cripto_mercados_usuario",
 ]
 
 
@@ -129,6 +130,15 @@ def _asegurar_esquema_cripto(conn):
         ALTER TABLE cripto_alertas_inteligentes
             ADD COLUMN IF NOT EXISTS persistencia_requerida INTEGER DEFAULT 2,
             ADD COLUMN IF NOT EXISTS conteos_condiciones JSONB DEFAULT '{}'::jsonb;
+
+        CREATE TABLE IF NOT EXISTS cripto_mercados_usuario (
+            chat_id TEXT NOT NULL,
+            book TEXT NOT NULL,
+            fuentes_detectadas JSONB DEFAULT '[]'::jsonb,
+            creado_en TIMESTAMPTZ DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (chat_id, book)
+        );
 
         CREATE TABLE IF NOT EXISTS cripto_premium_users (
             chat_id TEXT PRIMARY KEY,

@@ -159,6 +159,15 @@ CREATE TABLE IF NOT EXISTS cripto_alertas_inteligentes (
     actualizado_en TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS cripto_mercados_usuario (
+    chat_id TEXT NOT NULL,
+    book TEXT NOT NULL,
+    fuentes_detectadas JSONB DEFAULT '[]'::jsonb,
+    creado_en TIMESTAMPTZ DEFAULT NOW(),
+    actualizado_en TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (chat_id, book)
+);
+
 -- Tabla de metadatos de backup
 CREATE TABLE IF NOT EXISTS _backup_metadata (
     id SERIAL PRIMARY KEY,

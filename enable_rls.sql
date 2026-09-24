@@ -10,7 +10,8 @@ BEGIN
         'chats_avisados_actualizaciones', 'modo_tester', 'chats_id_estados',
         'reportes', 'cripto_premium_users', 'cripto_alertas',
         'cripto_fuerza_alertas',
-        'cripto_alertas_inteligentes'
+        'cripto_alertas_inteligentes',
+        'cripto_mercados_usuario'
     ]
     LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tabla);

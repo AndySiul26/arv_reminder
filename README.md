@@ -466,6 +466,33 @@ El informe guarda proveedor, rango histórico, velas, giros comparables y calida
 de muestra. Es un análisis probabilístico y reproducible, no una garantía del
 máximo o mínimo futuro ni asesoría financiera.
 
+### Lista e informe de mercados
+
+`/mercados` abre una lista personal premium. Permite agregar hasta 20 pares
+exactos, quitarlos individualmente y generar un informe directo bajo demanda.
+También está disponible como **Mis mercados** en `/start`. La lista se conserva
+en Supabase por `chat_id`; USD, MXN, USDT y las demás monedas nunca se sustituyen.
+Un par temporalmente ausente también puede guardarse: el informe señalará que
+ninguna fuente configurada lo publica en ese momento.
+
+Para cada par el informe consulta independientemente todos los proveedores que
+lo publiquen:
+
+- **Bitso:** último trade, VWAP de los trades paginados para 1 minuto, 5 minutos,
+  30 minutos, 1 hora, 4 horas y 1 día, más el VWAP oficial de 24 horas del ticker.
+- **Coinbase Exchange:** último trade y promedio del precio típico OHLC
+  ponderado por volumen para las mismas temporalidades.
+
+Un `*` indica que el histórico de trades de Bitso no cubrió toda la ventana; el
+mensaje muestra muestras y cobertura, en lugar de presentar el valor parcial
+como completo. `n/d` significa que no hubo datos suficientes para ese intervalo.
+Cada cifra se agrupa bajo el exchange que la originó y la hora del informe se
+muestra en UTC.
+
+La generación se ejecuta en un hilo separado para no bloquear el webhook. Los
+mercados se mantienen en bloques completos y el informe se divide alrededor de
+3,800 caracteres cuando no cabe con seguridad en un solo mensaje de Telegram.
+
 ### Reportes
 
 `/reportar` solicita una descripción del problema. El reporte se guarda en la
@@ -537,6 +564,7 @@ consulta, edición y envío.
 | `cripto_alertas` | Banda, modo, rearme y estado de cada criptoalerta. |
 | `cripto_fuerza_alertas` | Temporalidad, referencia, umbral y estado del análisis de fuerza. |
 | `cripto_alertas_inteligentes` | Calibración histórica, estado y condiciones multitemporales. |
+| `cripto_mercados_usuario` | Pares elegidos por cada usuario para informes directos. |
 | `cripto_premium_users` | Usuarios autorizados para las funciones premium. |
 
 #### Campos principales de `recordatorios`
@@ -598,6 +626,7 @@ Se respaldan:
 - `cripto_alertas`.
 - `cripto_fuerza_alertas`.
 - `cripto_alertas_inteligentes`.
+- `cripto_mercados_usuario`.
 
 `modo_tester` no forma parte del respaldo actual. Este PostgreSQL tampoco se usa
 automáticamente como origen alternativo si Supabase cae; es una réplica para
@@ -674,6 +703,8 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `CRYPTO_SMART_INTERVAL_SECONDS` | No | Frecuencia del monitor inteligente; mínimo: 60 segundos. |
 | `CRYPTO_SMART_REPEAT_SECONDS` | No | Separación de seguimientos persistentes; mínimo: 180, predeterminado: 300 segundos. |
 | `CRYPTO_SMART_HISTORY_CANDLES` | No | Velas para calibración inicial; entre 300 y 1800, predeterminado: 900. |
+| `CRYPTO_REPORT_MAX_MARKETS` | No | Mercados guardados por usuario; predeterminado: 20, máximo: 30. |
+| `CRYPTO_REPORT_BITSO_PAGES` | No | Páginas de 100 trades usadas por mercado; predeterminado: 8, máximo: 20. |
 
 Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
 y callbacks, y aceptan `TELEGRAM_TOKEN` como variable principal.

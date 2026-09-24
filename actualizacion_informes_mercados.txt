@@ -1,0 +1,18 @@
+TITULO: 📊 Lista personal e informes multiexchange
+DESCRIPCION:
+¡Hola! 👋 ARV Reminder incorpora informes directos de mercado:
+
+⭐ *Elige tus mercados*
+• Usa /mercados para agregar o quitar los pares que te interesan.
+• Puedes combinar mercados en USD, MXN u otras monedas exactas.
+
+🏦 *Información transparente por exchange*
+• El informe separa Bitso y Coinbase Exchange.
+• Muestra el último trade y promedios de 1 min, 5 min, 30 min, 1 h, 4 h y 1 día.
+• Bitso incluye su VWAP oficial de 24 horas cuando está disponible.
+• Los promedios parciales se marcan claramente con un asterisco.
+
+📨 *Informes grandes sin cortes*
+• Si seleccionas muchos mercados, el bot divide automáticamente el informe en varias partes compatibles con Telegram.
+
+Abre /mercados y crea tu lista personal.

@@ -432,6 +432,17 @@ def crear_tablas_criptoalertas(supabase: Client):
             ADD COLUMN IF NOT EXISTS persistencia_requerida INTEGER NOT NULL DEFAULT 2,
             ADD COLUMN IF NOT EXISTS conteos_condiciones JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+        CREATE TABLE IF NOT EXISTS cripto_mercados_usuario (
+            chat_id TEXT NOT NULL,
+            book TEXT NOT NULL,
+            fuentes_detectadas JSONB NOT NULL DEFAULT '[]'::jsonb,
+            creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (chat_id, book)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cripto_mercados_chat
+            ON cripto_mercados_usuario (chat_id, creado_en);
+
         NOTIFY pgrst, 'reload schema';
         """
         supabase.rpc("exec_sql", {"sql": sql}).execute()
@@ -479,6 +490,7 @@ def asegurar_seguridad_supabase(supabase: Client):
         "cripto_alertas",
         "cripto_fuerza_alertas",
         "cripto_alertas_inteligentes",
+        "cripto_mercados_usuario",
     ]
     nombres = ", ".join(f"'{tabla}'" for tabla in tablas)
     sql = f"""
