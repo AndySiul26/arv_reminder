@@ -805,6 +805,8 @@ heredada `TELEGRAM_BOT_TOKEN`.
   variables de entorno.
 - `SUPABASE_KEY_SERVICE_ROLE` concede privilegios elevados, se usa únicamente
   desde el backend y debe permanecer en el `.env` protegido del VPS.
+- La aplicación no conserva ni acepta `SUPABASE_KEY` como fallback: si falta la
+  clave privada del backend, entra en mantenimiento en lugar de usar `anon`.
 - Todas las tablas tienen RLS habilitado. Los roles `anon` y `authenticated` no
   tienen privilegios sobre las tablas, secuencias ni RPC administrativas.
 - `exec_sql` y `reclamar_envio_recordatorio` sólo pueden ejecutarse con

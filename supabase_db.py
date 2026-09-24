@@ -45,9 +45,7 @@ NOTIFICATION_COOLDOWN = 300  # 5 minutes
 
 # Cargar configuración de Supabase desde variables de entorno
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_KEY_SERVICE_ROLE") or os.getenv("SUPABASE_KEY")
-)
+SUPABASE_KEY = os.getenv("SUPABASE_KEY_SERVICE_ROLE")
 
 # Inicializar cliente de Supabase
 supabase: Client = None
