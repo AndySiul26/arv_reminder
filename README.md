@@ -471,9 +471,11 @@ máximo o mínimo futuro ni asesoría financiera.
 `/mercados` abre una lista personal premium. Permite agregar hasta 20 pares
 exactos, quitarlos individualmente y generar un informe directo bajo demanda.
 También está disponible como **Mis mercados** en `/start`. La lista se conserva
-en Supabase por `chat_id`; USD, MXN, USDT y las demás monedas nunca se sustituyen.
-Un par temporalmente ausente también puede guardarse: el informe señalará que
-ninguna fuente configurada lo publica en ese momento.
+en Supabase por `chat_id`. El par solicitado siempre se conserva; si está
+cotizado en USD, el informe también puede añadir comparativas cercanas de
+Binance en USDT, USDC o TUSD, pero las identifica expresamente y nunca las
+presenta como USD exacto. Un par temporalmente ausente también puede guardarse:
+el informe señalará que ninguna fuente configurada lo publica en ese momento.
 
 Para cada par el informe consulta independientemente todos los proveedores que
 lo publiquen:
@@ -482,6 +484,11 @@ lo publiquen:
   30 minutos, 1 hora, 4 horas y 1 día, más el VWAP oficial de 24 horas del ticker.
 - **Coinbase Exchange:** último trade y promedio del precio típico OHLC
   ponderado por volumen para las mismas temporalidades.
+- **Binance Spot:** último trade y VWAP calculado con el volumen base y cotizado
+  de sus velas para las mismas temporalidades. Si se pidió un par de la familia
+  USD, consulta los pares activos configurados (`USD`, `USDT`, `USDC`, `TUSD`) y
+  muestra el nombre real de cada mercado. Solo incorpora símbolos que Binance
+  marque actualmente como negociables.
 
 Un `*` indica que el histórico de trades de Bitso no cubrió toda la ventana; el
 mensaje muestra muestras y cobertura, en lugar de presentar el valor parcial
@@ -705,6 +712,8 @@ Crear `.env` a partir de `.env.example`. Nunca subir `.env` al repositorio.
 | `CRYPTO_SMART_HISTORY_CANDLES` | No | Velas para calibración inicial; entre 300 y 1800, predeterminado: 900. |
 | `CRYPTO_REPORT_MAX_MARKETS` | No | Mercados guardados por usuario; predeterminado: 20, máximo: 30. |
 | `CRYPTO_REPORT_BITSO_PAGES` | No | Páginas de 100 trades usadas por mercado; predeterminado: 8, máximo: 20. |
+| `BINANCE_API_BASE_URL` | No | API pública spot; por defecto `https://api.binance.com/api/v3`. |
+| `BINANCE_COMPARABLE_QUOTES` | No | Cotizaciones comparables, claramente etiquetadas; por defecto `USD,USDT,USDC,TUSD`. |
 
 Todos los mecanismos de registro del webhook solicitan explícitamente mensajes
 y callbacks, y aceptan `TELEGRAM_TOKEN` como variable principal.

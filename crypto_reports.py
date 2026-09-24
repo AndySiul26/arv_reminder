@@ -24,8 +24,20 @@ TIMEFRAMES = (
 MAX_MARKETS = max(1, min(30, int(os.getenv("CRYPTO_REPORT_MAX_MARKETS", "20"))))
 BITSO_MAX_PAGES = max(1, min(20, int(os.getenv("CRYPTO_REPORT_BITSO_PAGES", "8"))))
 MESSAGE_LIMIT = 3800
+BINANCE_API_BASE_URL = os.getenv(
+    "BINANCE_API_BASE_URL", "https://api.binance.com/api/v3"
+).rstrip("/")
+BINANCE_COMPARABLE_QUOTES = tuple(
+    quote.strip().upper()
+    for quote in os.getenv(
+        "BINANCE_COMPARABLE_QUOTES", "USD,USDT,USDC,TUSD"
+    ).split(",")
+    if quote.strip()
+)
 _cache = {}
 _cache_lock = threading.Lock()
+_binance_markets_cache = {"expires": 0, "items": []}
+_binance_markets_lock = threading.Lock()
 
 
 def _db():
@@ -53,6 +65,13 @@ def detectar_fuentes(book):
     try:
         crypto_strength.validar_producto(book)
         sources.append("coinbase_exchange")
+    except Exception:
+        pass
+    try:
+        sources.extend(
+            f"binance:{item['symbol'].lower()}"
+            for item in _binance_comparable_markets(book)
+        )
     except Exception:
         pass
     return sources
@@ -211,6 +230,121 @@ def _coinbase_report(book):
     }
 
 
+def _binance_get(path, params=None):
+    response = requests.get(
+        f"{BINANCE_API_BASE_URL}/{path.lstrip('/')}",
+        params=params,
+        headers={"User-Agent": "ARV-Reminder/4.0 market-reports"},
+        timeout=crypto_smart.TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _binance_markets():
+    """Devuelve mercados spot activos de Binance con caché de una hora."""
+    now = time.time()
+    with _binance_markets_lock:
+        if _binance_markets_cache["expires"] > now:
+            return list(_binance_markets_cache["items"])
+    payload = _binance_get("exchangeInfo")
+    markets = [
+        item for item in payload.get("symbols", [])
+        if item.get("status") == "TRADING"
+        and item.get("isSpotTradingAllowed", True)
+    ]
+    with _binance_markets_lock:
+        _binance_markets_cache["items"] = markets
+        _binance_markets_cache["expires"] = now + 3600
+    return list(markets)
+
+
+def _binance_comparable_markets(book):
+    """Encuentra el par exacto y equivalentes USD sin ocultar su cotización."""
+    base, requested_quote = str(book).upper().split("_", 1)
+    if requested_quote in BINANCE_COMPARABLE_QUOTES:
+        quotes = set(BINANCE_COMPARABLE_QUOTES)
+    else:
+        quotes = {requested_quote}
+    rank = {quote: index for index, quote in enumerate(BINANCE_COMPARABLE_QUOTES)}
+    matches = [
+        item for item in _binance_markets()
+        if item.get("baseAsset") == base and item.get("quoteAsset") in quotes
+    ]
+    return sorted(
+        matches,
+        key=lambda item: (
+            0 if item.get("quoteAsset") == requested_quote else 1,
+            rank.get(item.get("quoteAsset"), 999),
+        ),
+    )
+
+
+def _binance_klines(symbol, interval, limit):
+    rows = _binance_get(
+        "klines", params={"symbol": symbol, "interval": interval, "limit": limit}
+    )
+    result = []
+    for row in rows:
+        try:
+            result.append({
+                "time": int(row[0]) // 1000,
+                "base_volume": Decimal(str(row[5])),
+                "quote_volume": Decimal(str(row[7])),
+            })
+        except (IndexError, InvalidOperation, TypeError, ValueError):
+            continue
+    return result
+
+
+def _binance_vwap(candles, cutoff):
+    selected = [item for item in candles if item["time"] >= cutoff]
+    base_volume = sum(
+        (item["base_volume"] for item in selected), Decimal("0")
+    )
+    quote_volume = sum(
+        (item["quote_volume"] for item in selected), Decimal("0")
+    )
+    return quote_volume / base_volume if base_volume > 0 else None
+
+
+def _binance_report(market, requested_book):
+    symbol = market["symbol"]
+    short = _binance_klines(symbol, "1m", 1000)
+    long = _binance_klines(symbol, "5m", 300)
+    if not short:
+        raise RuntimeError(f"Binance no devolvió velas para {symbol}")
+    now = int(datetime.now(timezone.utc).timestamp())
+    averages = {}
+    partial = {}
+    for label, seconds in TIMEFRAMES:
+        source = short if seconds <= 14400 else long
+        averages[label] = _binance_vwap(source, now - seconds)
+        oldest = min((item["time"] for item in source), default=now)
+        partial[label] = oldest > now - seconds
+    trades = _binance_get("trades", params={"symbol": symbol, "limit": 1})
+    if not trades:
+        raise RuntimeError(f"Binance no devolvió el último trade de {symbol}")
+    requested_quote = requested_book.upper().split("_", 1)[1]
+    actual_quote = market["quoteAsset"]
+    return {
+        "provider": f"Binance Spot · {market['baseAsset']}/{actual_quote}",
+        "last": Decimal(str(trades[-1]["price"])),
+        "averages": averages,
+        "partial": partial,
+        "vwap_24h": None,
+        "samples": len(short) + len(long),
+        "coverage": max(
+            0, now - min((item["time"] for item in long), default=now)
+        ),
+        "method": "VWAP de velas por volumen negociado",
+        "quote_note": (
+            None if actual_quote == requested_quote else
+            f"Comparativa en {actual_quote}; no es {requested_quote} exacto."
+        ),
+    }
+
+
 def _duration(seconds):
     if seconds >= 3600:
         return f"{seconds / 3600:.1f} h"
@@ -233,6 +367,8 @@ def _source_block(data):
         lines.append(f"VWAP oficial 24 h: {_format(data['vwap_24h'])}")
     if any(data["partial"].values()):
         lines.append(f"* parcial; trades disponibles: {data['samples']} / cobertura {_duration(data['coverage'])}")
+    if data.get("quote_note"):
+        lines.append(f"ℹ️ {data['quote_note']}")
     return "\n".join(lines)
 
 
@@ -258,6 +394,25 @@ def reporte_mercado(book):
     except Exception:
         if not found:
             blocks.append("🏦 Coinbase Exchange: par no disponible")
+    try:
+        binance_markets = _binance_comparable_markets(book)
+        if binance_markets:
+            for market in binance_markets:
+                try:
+                    blocks.append(_source_block(_binance_report(market, book)))
+                    found = True
+                except Exception as exc:
+                    blocks.append(
+                        f"🏦 Binance Spot · {market['baseAsset']}/{market['quoteAsset']}: "
+                        f"información temporalmente no disponible ({type(exc).__name__})"
+                    )
+        else:
+            blocks.append("🏦 Binance Spot: par o equivalente USD no disponible")
+    except Exception as exc:
+        blocks.append(
+            "🏦 Binance Spot: información temporalmente no disponible "
+            f"({type(exc).__name__})"
+        )
     text = "\n\n".join(blocks)
     with _cache_lock:
         _cache[book] = (time.time(), text)

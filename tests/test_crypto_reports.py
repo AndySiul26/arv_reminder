@@ -45,10 +45,33 @@ class CryptoReportProviderTests(unittest.TestCase):
     def test_source_detection_keeps_exact_pair_on_both_exchanges(
         self, books, bitso_ticker, validate
     ):
-        self.assertEqual(
-            crypto_reports.detectar_fuentes("ada_usd"),
-            ["bitso", "coinbase_exchange"],
-        )
+        with patch("crypto_reports._binance_comparable_markets", return_value=[]):
+            self.assertEqual(
+                crypto_reports.detectar_fuentes("ada_usd"),
+                ["bitso", "coinbase_exchange"],
+            )
+
+    @patch("crypto_reports._binance_markets")
+    def test_binance_usd_request_finds_labeled_stablecoin_pairs(self, markets):
+        markets.return_value = [
+            {"symbol": "GALAUSDT", "baseAsset": "GALA", "quoteAsset": "USDT"},
+            {"symbol": "GALATUSD", "baseAsset": "GALA", "quoteAsset": "TUSD"},
+            {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT"},
+        ]
+        result = crypto_reports._binance_comparable_markets("gala_usd")
+        self.assertEqual([item["symbol"] for item in result], ["GALAUSDT", "GALATUSD"])
+
+    def test_binance_comparison_discloses_non_exact_quote(self):
+        text = crypto_reports._source_block({
+            "provider": "Binance Spot · GALA/USDT",
+            "last": Decimal("0.02"),
+            "averages": {label: Decimal("0.02") for label, _ in crypto_reports.TIMEFRAMES},
+            "partial": {label: False for label, _ in crypto_reports.TIMEFRAMES},
+            "vwap_24h": None, "samples": 2, "coverage": 86400,
+            "method": "VWAP", "quote_note": "Comparativa en USDT; no es USD exacto.",
+        })
+        self.assertIn("Binance Spot · GALA/USDT", text)
+        self.assertIn("no es USD exacto", text)
 
 
 class CryptoReportConversationTests(unittest.TestCase):
